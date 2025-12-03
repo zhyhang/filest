@@ -1,0 +1,1718 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Filest - 远程文件管理器</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <style>
+        * { user-select: none; }
+        .file-item:hover { background: #e5f3ff; }
+        .file-item.selected { background: #cce8ff; border: 1px solid #99d1ff; }
+        .sidebar-item:hover { background: #e5e5e5; }
+        .sidebar-item.active { background: #cce8ff; }
+        .context-menu { box-shadow: 0 2px 10px rgba(0,0,0,0.2); }
+        .breadcrumb-item:hover { background: #e5e5e5; }
+        .toolbar-btn:hover:not(:disabled) { background: #e5e5e5; }
+        .toolbar-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .modal-overlay { background: rgba(0,0,0,0.4); }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+        .drag-over { background: #e5f3ff !important; border: 2px dashed #0078d4 !important; }
+        .loading { animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .spinner { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        /* Folder tree styles */
+        .tree-item { padding-left: 0.5rem; }
+        .tree-item:hover { background: #e5e5e5; }
+        .tree-item.active { background: #cce8ff; }
+        .tree-toggle { transition: transform 0.15s; min-width: 14px; }
+        .tree-toggle.expanded { transform: rotate(90deg); }
+        /* Picker styles */
+        .picker-toggle { transition: transform 0.15s; min-width: 16px; }
+        .picker-toggle.expanded { transform: rotate(90deg); }
+        .picker-item.selected { background: #dbeafe; }
+        /* Resizer styles */
+        #resizer:hover, #resizer:active { width: 3px; }
+        #resizer:active { background: #3b82f6; }
+    </style>
+</head>
+<body class="h-screen overflow-hidden bg-gray-100 flex flex-col text-sm">
+<!-- Title Bar -->
+<div class="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-3">
+    <i class="ri-folder-3-fill text-yellow-500 text-2xl"></i>
+    <span class="font-medium text-gray-700">Filest - 远程文件管理器</span>
+    <span id="serverStatus" class="ml-auto text-xs px-2 py-1 rounded bg-green-100 text-green-700">
+            <i class="ri-server-line"></i> 已连接
+        </span>
+    <button id="btnLock" class="ml-2 p-1.5 rounded hover:bg-gray-100 text-gray-600" title="锁定">
+        <i class="ri-lock-line text-lg"></i>
+    </button>
+</div>
+<!-- Toolbar -->
+<div class="bg-white border-b border-gray-200 px-2 py-1 flex items-center gap-1">
+    <button id="btnBack" class="toolbar-btn p-2 rounded" title="后退" disabled>
+        <i class="ri-arrow-left-line text-lg"></i>
+    </button>
+    <button id="btnForward" class="toolbar-btn p-2 rounded" title="前进" disabled>
+        <i class="ri-arrow-right-line text-lg"></i>
+    </button>
+    <button id="btnUp" class="toolbar-btn p-2 rounded" title="上级目录" disabled>
+        <i class="ri-arrow-up-line text-lg"></i>
+    </button>
+    <div class="w-px h-6 bg-gray-300 mx-1"></div>
+    <button id="btnRefresh" class="toolbar-btn p-2 rounded" title="刷新">
+        <i class="ri-refresh-line text-lg"></i>
+    </button>
+    <div class="w-px h-6 bg-gray-300 mx-1"></div>
+    <button id="btnNewFolder" class="toolbar-btn p-2 rounded" title="新建文件夹">
+        <i class="ri-folder-add-line text-lg"></i>
+    </button>
+    <button id="btnUpload" class="toolbar-btn p-2 rounded" title="上传文件">
+        <i class="ri-upload-2-line text-lg"></i>
+    </button>
+    <button id="btnDownload" class="toolbar-btn p-2 rounded" title="下载" disabled>
+        <i class="ri-download-2-line text-lg"></i>
+    </button>
+    <div class="w-px h-6 bg-gray-300 mx-1"></div>
+    <button id="btnCut" class="toolbar-btn p-2 rounded" title="剪切" disabled>
+        <i class="ri-scissors-cut-line text-lg"></i>
+    </button>
+    <button id="btnCopy" class="toolbar-btn p-2 rounded" title="复制" disabled>
+        <i class="ri-file-copy-line text-lg"></i>
+    </button>
+    <button id="btnPaste" class="toolbar-btn p-2 rounded" title="粘贴" disabled>
+        <i class="ri-clipboard-line text-lg"></i>
+    </button>
+    <button id="btnRename" class="toolbar-btn p-2 rounded" title="重命名" disabled>
+        <i class="ri-edit-line text-lg"></i>
+    </button>
+    <button id="btnDelete" class="toolbar-btn p-2 rounded" title="删除" disabled>
+        <i class="ri-delete-bin-line text-lg"></i>
+    </button>
+    <div class="w-px h-6 bg-gray-300 mx-1"></div>
+    <button id="btnViewGrid" class="toolbar-btn p-2 rounded bg-gray-100" title="网格视图">
+        <i class="ri-grid-fill text-lg"></i>
+    </button>
+    <button id="btnViewList" class="toolbar-btn p-2 rounded" title="列表视图">
+        <i class="ri-list-check text-lg"></i>
+    </button>
+    <div class="flex-1"></div>
+    <div class="relative">
+        <input type="text" id="searchInput" placeholder="搜索文件..."
+               class="pl-8 pr-3 py-1.5 border border-gray-300 rounded text-sm w-48 focus:outline-none focus:border-blue-500">
+        <i class="ri-search-line absolute left-2 top-1/2 -translate-y-1/2 text-gray-400"></i>
+    </div>
+</div>
+<!-- Address Bar -->
+<div class="bg-white border-b border-gray-200 px-3 py-1.5 flex items-center gap-2">
+    <i class="ri-folder-line text-gray-500"></i>
+    <div id="breadcrumb" class="flex items-center gap-1 flex-1 overflow-x-auto">
+        <!-- Breadcrumb items -->
+    </div>
+</div>
+<!-- Main Content -->
+<div class="flex flex-1 overflow-hidden">
+    <!-- Sidebar -->
+    <div id="sidebar" class="bg-gray-50 border-r border-gray-200 overflow-y-auto flex-shrink-0" style="width: 224px;">
+        <div class="p-2">
+            <div class="text-xs text-gray-500 font-medium px-2 py-1">快速访问</div>
+            <div id="quickAccess" class="space-y-0.5">
+                <div class="sidebar-item flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer" data-path="/">
+                    <i class="ri-home-4-line text-gray-600"></i>
+                    <span>根目录</span>
+                </div>
+            </div>
+            <div class="text-xs text-gray-500 font-medium px-2 py-1 mt-4 flex items-center justify-between">
+                <span>目录树</span>
+                <button id="btnRefreshTree" class="hover:text-gray-700" title="刷新目录树">
+                    <i class="ri-refresh-line text-xs"></i>
+                </button>
+            </div>
+            <div id="folderTree" class="space-y-0.5 max-h-80 overflow-y-auto scrollbar-thin">
+                <!-- Folder tree will be rendered here -->
+            </div>
+            <div class="text-xs text-gray-500 font-medium px-2 py-1 mt-4">服务器信息</div>
+            <div id="diskInfo" class="px-2 py-2 text-xs text-gray-600 space-y-1">
+                <div class="flex justify-between">
+                    <span>总空间:</span>
+                    <span id="totalSpace">-- GB</span>
+                </div>
+                <div class="flex justify-between">
+                    <span>已使用:</span>
+                    <span id="usedSpace">-- GB</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2 mt-1">
+                    <div id="diskBar" class="bg-blue-500 h-2 rounded-full transition-all" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Resizer -->
+    <div id="resizer" class="w-1 bg-gray-200 hover:bg-blue-400 cursor-col-resize flex-shrink-0 transition-colors"></div>
+    <!-- File List -->
+    <div id="fileContainer" class="flex-1 overflow-auto p-4 bg-white">
+        <div id="fileList" class="grid grid-cols-6 gap-2">
+            <!-- Files will be rendered here -->
+        </div>
+        <div id="loadingIndicator" class="hidden flex items-center justify-center h-full">
+            <div class="text-center text-gray-500">
+                <i class="ri-loader-4-line text-4xl spinner"></i>
+                <p class="mt-2">加载中...</p>
+            </div>
+        </div>
+        <div id="emptyIndicator" class="hidden flex items-center justify-center h-full">
+            <div class="text-center text-gray-400">
+                <i class="ri-folder-open-line text-6xl"></i>
+                <p class="mt-2">此文件夹为空</p>
+            </div>
+        </div>
+        <div id="errorIndicator" class="hidden flex items-center justify-center h-full">
+            <div class="text-center text-red-400">
+                <i class="ri-error-warning-line text-6xl"></i>
+                <p class="mt-2" id="errorMessage">加载失败</p>
+                <button onclick="fm.refresh()" class="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">重试</button>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- Status Bar -->
+<div class="bg-gray-100 border-t border-gray-200 px-4 py-1 flex items-center text-xs text-gray-600">
+    <span id="itemCount">0 个项目</span>
+    <span class="mx-2">|</span>
+    <span id="selectedCount">未选择</span>
+    <span class="flex-1"></span>
+    <span id="currentPath">/</span>
+</div>
+<!-- Context Menu -->
+<div id="contextMenu" class="context-menu fixed bg-white border border-gray-200 rounded-lg py-1 hidden z-50 min-w-48">
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="open">
+        <i class="ri-folder-open-line text-gray-500 w-4"></i>
+        <span>打开</span>
+    </div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="download">
+        <i class="ri-download-line text-gray-500 w-4"></i>
+        <span>下载</span>
+    </div>
+    <div class="border-t border-gray-100 my-1"></div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="cut">
+        <i class="ri-scissors-cut-line text-gray-500 w-4"></i>
+        <span>剪切</span>
+        <span class="ml-auto text-gray-400 text-xs">Ctrl+X</span>
+    </div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="copy">
+        <i class="ri-file-copy-line text-gray-500 w-4"></i>
+        <span>复制</span>
+        <span class="ml-auto text-gray-400 text-xs">Ctrl+C</span>
+    </div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="paste">
+        <i class="ri-clipboard-line text-gray-500 w-4"></i>
+        <span>粘贴</span>
+        <span class="ml-auto text-gray-400 text-xs">Ctrl+V</span>
+    </div>
+    <div class="border-t border-gray-100 my-1"></div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="rename">
+        <i class="ri-edit-line text-gray-500 w-4"></i>
+        <span>重命名</span>
+        <span class="ml-auto text-gray-400 text-xs">F2</span>
+    </div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="moveTo">
+        <i class="ri-folder-transfer-line text-gray-500 w-4"></i>
+        <span>移动到...</span>
+    </div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="copyTo">
+        <i class="ri-folders-line text-gray-500 w-4"></i>
+        <span>复制到...</span>
+    </div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3 text-red-600" data-action="delete">
+        <i class="ri-delete-bin-line w-4"></i>
+        <span>删除</span>
+        <span class="ml-auto text-red-400 text-xs">Del</span>
+    </div>
+    <div class="border-t border-gray-100 my-1"></div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="properties">
+        <i class="ri-information-line text-gray-500 w-4"></i>
+        <span>属性</span>
+    </div>
+</div>
+<!-- Folder Context Menu -->
+<div id="folderContextMenu" class="context-menu fixed bg-white border border-gray-200 rounded-lg py-1 hidden z-50 min-w-48">
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="newFolder">
+        <i class="ri-folder-add-line text-gray-500 w-4"></i>
+        <span>新建文件夹</span>
+    </div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="upload">
+        <i class="ri-upload-2-line text-gray-500 w-4"></i>
+        <span>上传文件</span>
+    </div>
+    <div class="border-t border-gray-100 my-1"></div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="paste">
+        <i class="ri-clipboard-line text-gray-500 w-4"></i>
+        <span>粘贴</span>
+        <span class="ml-auto text-gray-400 text-xs">Ctrl+V</span>
+    </div>
+    <div class="border-t border-gray-100 my-1"></div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="refresh">
+        <i class="ri-refresh-line text-gray-500 w-4"></i>
+        <span>刷新</span>
+        <span class="ml-auto text-gray-400 text-xs">F5</span>
+    </div>
+</div>
+<!-- Modal Template -->
+<div id="modal" class="modal-overlay fixed inset-0 hidden z-50 flex items-center justify-center">
+    <div class="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4">
+        <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+            <h3 id="modalTitle" class="font-medium">标题</h3>
+            <button id="modalClose" class="text-gray-400 hover:text-gray-600">
+                <i class="ri-close-line text-xl"></i>
+            </button>
+        </div>
+        <div id="modalBody" class="p-4">
+            <!-- Modal content -->
+        </div>
+        <div id="modalFooter" class="px-4 py-3 border-t border-gray-100 flex justify-end gap-2">
+            <button id="modalCancel" class="px-4 py-1.5 border border-gray-300 rounded hover:bg-gray-50">取消</button>
+            <button id="modalConfirm" class="px-4 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600">确定</button>
+        </div>
+    </div>
+</div>
+<!-- Upload Progress -->
+<div id="uploadProgress" class="fixed bottom-4 right-4 bg-white rounded-lg shadow-xl border border-gray-200 w-96 hidden z-40">
+    <div class="px-4 py-2 border-b border-gray-100 flex items-center justify-between">
+        <span class="font-medium text-sm">上传进度</span>
+        <div class="flex items-center gap-2">
+            <button id="cancelUpload" class="text-xs text-red-500 hover:text-red-600 px-2 py-0.5 border border-red-300 rounded hover:bg-red-50">
+                取消
+            </button>
+            <button id="closeProgress" class="text-gray-400 hover:text-gray-600">
+                <i class="ri-close-line"></i>
+            </button>
+        </div>
+    </div>
+    <div class="p-4">
+        <div class="flex items-center gap-2 mb-2">
+            <i class="ri-file-line text-gray-500"></i>
+            <span id="uploadFileName" class="text-sm truncate flex-1">filename.txt</span>
+            <span id="uploadPercent" class="text-sm text-gray-500">0%</span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2">
+            <div id="uploadBar" class="bg-blue-500 h-2 rounded-full transition-all" style="width: 0%"></div>
+        </div>
+        <div id="uploadStatus" class="text-xs text-gray-500 mt-2"></div>
+    </div>
+</div>
+<!-- Hidden file input -->
+<input type="file" id="fileInput" multiple class="hidden">
+<script>
+    // API Client for server communication (supports HTTP Basic Auth)
+    class ApiClient {
+        constructor(baseUrl = '') {
+            this.baseUrl = baseUrl;
+            this.authHeader = null;
+        }
+        setAuth(username, password) {
+            this.authHeader = 'Basic ' + btoa(username + ':' + password);
+        }
+        async request(method, endpoint, data = null, isFormData = false) {
+            const options = {
+                method,
+                headers: {},
+            };
+            // Add auth header if set
+            if (this.authHeader) {
+                options.headers['Authorization'] = this.authHeader;
+            }
+            if (data) {
+                if (isFormData) {
+                    options.body = data;
+                } else {
+                    options.headers['Content-Type'] = 'application/json';
+                    options.body = JSON.stringify(data);
+                }
+            }
+            const response = await fetch(`${this.baseUrl}${endpoint}`, options);
+
+            if (response.status === 401) {
+                throw new Error('认证失败，请刷新页面重新登录');
+            }
+
+            const result = await response.json();
+
+            if (!result.success) {
+                throw new Error(result.error || '操作失败');
+            }
+
+            return result;
+        }
+        async getFiles(path) {
+            return this.request('GET', `/api/files?path=${encodeURIComponent(path)}`);
+        }
+        async createFolder(path, name) {
+            return this.request('POST', '/api/folder', { path, name });
+        }
+        async uploadFiles(path, files, onProgress, onStatusChange) {
+            const formData = new FormData();
+            formData.append('path', path);
+            for (const file of files) {
+                formData.append('files', file);
+            }
+            
+            // Enhanced upload with retry and timeout handling
+            const maxRetries = 3;
+            const timeout = 5 * 60 * 1000; // 5 minutes timeout for large files
+            
+            const attemptUpload = (retryCount = 0) => {
+                return new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.timeout = timeout;
+                    xhr.open('POST', `${this.baseUrl}/api/upload`);
+                    
+                    // Add auth header if set
+                    if (this.authHeader) {
+                        xhr.setRequestHeader('Authorization', this.authHeader);
+                    }
+
+                    let lastLoaded = 0;
+                    let lastTime = Date.now();
+                    
+                    xhr.upload.onprogress = (e) => {
+                        if (e.lengthComputable && onProgress) {
+                            // Calculate upload speed
+                            const now = Date.now();
+                            const timeDiff = (now - lastTime) / 1000;
+                            const loadedDiff = e.loaded - lastLoaded;
+                            const speed = timeDiff > 0 ? loadedDiff / timeDiff : 0;
+                            
+                            lastLoaded = e.loaded;
+                            lastTime = now;
+                            
+                            onProgress(e.loaded, e.total, speed);
+                        }
+                    };
+
+                    xhr.onload = () => {
+                        if (xhr.status === 401) {
+                            reject(new Error('认证失败，请刷新页面重新登录'));
+                            return;
+                        }
+                        try {
+                            const result = JSON.parse(xhr.responseText);
+                            if (result.success) {
+                                resolve(result);
+                            } else {
+                                reject(new Error(result.error));
+                            }
+                        } catch (e) {
+                            reject(new Error('解析响应失败'));
+                        }
+                    };
+
+                    xhr.onerror = () => {
+                        if (retryCount < maxRetries) {
+                            if (onStatusChange) onStatusChange(`网络错误，正在重试 (${retryCount + 1}/${maxRetries})...`);
+                            setTimeout(() => {
+                                attemptUpload(retryCount + 1).then(resolve).catch(reject);
+                            }, 1000 * (retryCount + 1)); // Exponential backoff
+                        } else {
+                            reject(new Error('上传失败，已重试 ' + maxRetries + ' 次'));
+                        }
+                    };
+                    
+                    xhr.ontimeout = () => {
+                        if (retryCount < maxRetries) {
+                            if (onStatusChange) onStatusChange(`上传超时，正在重试 (${retryCount + 1}/${maxRetries})...`);
+                            setTimeout(() => {
+                                attemptUpload(retryCount + 1).then(resolve).catch(reject);
+                            }, 1000 * (retryCount + 1));
+                        } else {
+                            reject(new Error('上传超时，请检查网络连接'));
+                        }
+                    };
+                    
+                    // Store xhr for potential abort
+                    this.currentUploadXhr = xhr;
+                    xhr.send(formData);
+                });
+            };
+            
+            return attemptUpload();
+        }
+        
+        // Abort current upload
+        abortUpload() {
+            if (this.currentUploadXhr) {
+                this.currentUploadXhr.abort();
+                this.currentUploadXhr = null;
+            }
+        }
+        async downloadFile(path) {
+            window.open(`${this.baseUrl}/api/download?path=${encodeURIComponent(path)}`, '_blank');
+        }
+        async rename(path, newName) {
+            return this.request('PUT', '/api/rename', { path, newName });
+        }
+        async move(source, destination) {
+            return this.request('PUT', '/api/move', { source, destination });
+        }
+        async copy(source, destination) {
+            return this.request('POST', '/api/copy', { source, destination });
+        }
+        async delete(path) {
+            return this.request('DELETE', '/api/delete', { path });
+        }
+        async getInfo(path) {
+            return this.request('GET', `/api/info?path=${encodeURIComponent(path)}`);
+        }
+        async getFolders() {
+            return this.request('GET', '/api/folders');
+        }
+        async getDiskInfo() {
+            return this.request('GET', '/api/disk');
+        }
+        async search(query, path = '/') {
+            return this.request('GET', `/api/search?query=${encodeURIComponent(query)}&path=${encodeURIComponent(path)}`);
+        }
+    }
+    // File Manager App
+    class FileManager {
+        constructor() {
+            this.api = new ApiClient('');
+            this.currentPath = '/';
+            this.files = [];
+            this.selectedItems = [];
+            this.clipboard = { items: [], mode: null };
+            this.history = ['/'];
+            this.historyIndex = 0;
+            this.viewMode = 'grid';
+            this.searchQuery = '';
+            this.isConnected = false;
+            this.searchTimeout = null;
+            this.selectedTargetPath = '/'; // For move/copy dialogs
+
+            this.init();
+        }
+        async init() {
+            // Check for stored credentials or prompt for login
+            await this.authenticate();
+            this.bindEvents();
+            // Load navigation and side panel data in parallel for faster startup
+            await Promise.all([
+                this.navigateTo('/'),
+                this.loadDiskInfo(),
+                this.loadFolderTree()
+            ]);
+        }
+        async authenticate() {
+            // Try stored credentials first
+            const stored = localStorage.getItem('filest_auth');
+            if (stored) {
+                try {
+                    const { username, password } = JSON.parse(stored);
+                    this.api.setAuth(username, password);
+                    // Test auth
+                    await this.api.getDiskInfo();
+                    return;
+                } catch (e) {
+                    localStorage.removeItem('filest_auth');
+                }
+            }
+            // Show login dialog
+            return this.showLoginModal();
+        }
+        showLoginModal() {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('modal');
+                document.getElementById('modalTitle').textContent = '登录';
+                document.getElementById('modalBody').innerHTML = `
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-sm text-gray-600 mb-1">用户名</label>
+                            <input type="text" id="loginUsername" class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500" value="admin">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-600 mb-1">密码</label>
+                            <input type="password" id="loginPassword" class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500" value="admin123">
+                        </div>
+                    </div>
+                `;
+                document.getElementById('modalCancel').style.display = 'none';
+                modal.classList.remove('hidden');
+
+                const tryLogin = async () => {
+                    const username = document.getElementById('loginUsername').value;
+                    const password = document.getElementById('loginPassword').value;
+                    this.api.setAuth(username, password);
+                    try {
+                        await this.api.getDiskInfo();
+                        localStorage.setItem('filest_auth', JSON.stringify({ username, password }));
+                        document.getElementById('modalCancel').style.display = '';
+                        modal.classList.add('hidden');
+                        resolve();
+                    } catch (e) {
+                        this.showToast('登录失败，请检查用户名和密码');
+                    }
+                };
+
+                document.getElementById('modalConfirm').onclick = tryLogin;
+                // Allow enter key to submit
+                document.getElementById('loginPassword').onkeydown = (e) => {
+                    if (e.key === 'Enter') tryLogin();
+                };
+                setTimeout(() => document.getElementById('loginUsername').focus(), 100);
+            });
+        }
+        async loadDiskInfo() {
+            try {
+                const { total, used, usedFormatted } = await this.api.getDiskInfo();
+                document.getElementById('totalSpace').textContent = this.formatSize(total);
+                document.getElementById('usedSpace').textContent = usedFormatted;
+                document.getElementById('diskBar').style.width = `${(used / total * 100).toFixed(1)}%`;
+            } catch (e) {
+                console.error('Failed to load disk info:', e);
+            }
+        }
+        bindEvents() {
+            // Navigation
+            document.getElementById('btnBack').onclick = () => this.goBack();
+            document.getElementById('btnForward').onclick = () => this.goForward();
+            document.getElementById('btnUp').onclick = () => this.goUp();
+            document.getElementById('btnRefresh').onclick = () => this.refresh();
+            // Actions
+            document.getElementById('btnNewFolder').onclick = () => this.showNewFolderModal();
+            document.getElementById('btnUpload').onclick = () => document.getElementById('fileInput').click();
+            document.getElementById('btnDownload').onclick = () => this.downloadSelected();
+            document.getElementById('btnCut').onclick = () => this.cutSelected();
+            document.getElementById('btnCopy').onclick = () => this.copySelected();
+            document.getElementById('btnPaste').onclick = () => this.paste();
+            document.getElementById('btnRename').onclick = () => this.showRenameModal();
+            document.getElementById('btnDelete').onclick = () => this.deleteSelected();
+            // View mode
+            document.getElementById('btnViewGrid').onclick = () => this.setViewMode('grid');
+            document.getElementById('btnViewList').onclick = () => this.setViewMode('list');
+            // Search
+            document.getElementById('searchInput').oninput = (e) => {
+                this.searchQuery = e.target.value.toLowerCase();
+                clearTimeout(this.searchTimeout);
+                this.searchTimeout = setTimeout(() => this.renderFiles(), 300);
+            };
+            // Sidebar
+            document.querySelectorAll('.sidebar-item').forEach(item => {
+                item.onclick = () => this.navigateTo(item.dataset.path);
+            });
+            // Folder tree refresh button
+            document.getElementById('btnRefreshTree').onclick = () => this.loadFolderTree();
+            // Lock button
+            document.getElementById('btnLock').onclick = () => this.lock();
+            // File input
+            document.getElementById('fileInput').onchange = (e) => this.uploadFiles(e.target.files);
+            // File container click (deselect)
+            document.getElementById('fileContainer').onclick = (e) => {
+                if (e.target.id === 'fileContainer' || e.target.id === 'fileList') {
+                    this.clearSelection();
+                }
+            };
+            // Right click on container (including empty directory)
+            document.getElementById('fileContainer').oncontextmenu = (e) => {
+                // Check if clicked on file container area (not on a file item)
+                const isFileItem = e.target.closest('.file-item');
+                if (!isFileItem) {
+                    e.preventDefault();
+                    this.showFolderContextMenu(e.clientX, e.clientY);
+                }
+            };
+            // Context menu
+            document.querySelectorAll('.context-item').forEach(item => {
+                item.onclick = () => {
+                    const action = item.dataset.action;
+                    this.handleContextAction(action);
+                    this.hideContextMenus();
+                };
+            });
+            // Hide context menu on click outside
+            document.onclick = () => this.hideContextMenus();
+            // Modal
+            document.getElementById('modalClose').onclick = () => this.hideModal();
+            document.getElementById('modalCancel').onclick = () => this.hideModal();
+            document.getElementById('closeProgress').onclick = () => {
+                document.getElementById('uploadProgress').classList.add('hidden');
+            };
+            document.getElementById('cancelUpload').onclick = () => {
+                this.api.abortUpload();
+                document.getElementById('uploadStatus').textContent = '上传已取消';
+                document.getElementById('uploadBar').style.width = '0%';
+                this.showToast('上传已取消');
+            };
+            // Keyboard shortcuts
+            document.onkeydown = (e) => this.handleKeyboard(e);
+            // Drag and drop
+            const container = document.getElementById('fileContainer');
+            container.ondragover = (e) => {
+                e.preventDefault();
+                container.classList.add('drag-over');
+            };
+            container.ondragleave = () => container.classList.remove('drag-over');
+            container.ondrop = (e) => {
+                e.preventDefault();
+                container.classList.remove('drag-over');
+                if (e.dataTransfer.files.length) {
+                    this.uploadFiles(e.dataTransfer.files);
+                }
+            };
+            // Sidebar resizer
+            const resizer = document.getElementById('resizer');
+            const sidebar = document.getElementById('sidebar');
+            let isResizing = false;
+            
+            resizer.onmousedown = (e) => {
+                isResizing = true;
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+                resizer.classList.add('bg-blue-500');
+            };
+            
+            document.onmousemove = (e) => {
+                if (!isResizing) return;
+                const newWidth = e.clientX;
+                // Allow any width from 100px to 80% of window width
+                if (newWidth >= 100 && newWidth <= window.innerWidth * 0.8) {
+                    sidebar.style.width = newWidth + 'px';
+                }
+            };
+            
+            document.onmouseup = () => {
+                if (isResizing) {
+                    isResizing = false;
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                    resizer.classList.remove('bg-blue-500');
+                    // Save to localStorage
+                    localStorage.setItem('filest_sidebar_width', sidebar.style.width);
+                }
+            };
+            
+            // Restore saved width
+            const savedWidth = localStorage.getItem('filest_sidebar_width');
+            if (savedWidth) {
+                sidebar.style.width = savedWidth;
+            }
+        }
+        async navigateTo(path) {
+            this.showLoading();
+            try {
+                const result = await this.api.getFiles(path);
+                this.currentPath = result.path;
+                this.files = result.files;
+                this.clearSelection();
+
+                // Update history
+                if (this.history[this.historyIndex] !== path) {
+                    this.history = this.history.slice(0, this.historyIndex + 1);
+                    this.history.push(path);
+                    this.historyIndex = this.history.length - 1;
+                }
+
+                this.renderBreadcrumb();
+                this.renderFiles();
+                this.updateNavButtons();
+                this.updateSidebar();
+                this.hideLoading();
+            } catch (e) {
+                this.showError(e.message);
+            }
+        }
+        goBack() {
+            if (this.historyIndex > 0) {
+                this.historyIndex--;
+                this.navigateTo(this.history[this.historyIndex]);
+            }
+        }
+        goForward() {
+            if (this.historyIndex < this.history.length - 1) {
+                this.historyIndex++;
+                this.navigateTo(this.history[this.historyIndex]);
+            }
+        }
+        goUp() {
+            if (this.currentPath === '/') return;
+            const parent = this.currentPath.substring(0, this.currentPath.lastIndexOf('/')) || '/';
+            this.navigateTo(parent);
+        }
+        async refresh() {
+            // Save current path and refresh only current directory
+            const pathToRefresh = this.currentPath;
+            this.showLoading();
+            try {
+                const result = await this.api.getFiles(pathToRefresh);
+                this.currentPath = result.path;
+                this.files = result.files;
+                this.clearSelection();
+                this.renderBreadcrumb();
+                this.renderFiles();
+                this.updateNavButtons();
+                this.updateSidebar();
+                this.hideLoading();
+                await this.loadDiskInfo();
+                this.showToast('已刷新');
+            } catch (e) {
+                this.showError(e.message);
+            }
+        }
+        showLoading() {
+            document.getElementById('fileList').innerHTML = '';
+            document.getElementById('loadingIndicator').classList.remove('hidden');
+            document.getElementById('emptyIndicator').classList.add('hidden');
+            document.getElementById('errorIndicator').classList.add('hidden');
+        }
+        hideLoading() {
+            document.getElementById('loadingIndicator').classList.add('hidden');
+        }
+        showError(message) {
+            document.getElementById('loadingIndicator').classList.add('hidden');
+            document.getElementById('emptyIndicator').classList.add('hidden');
+            document.getElementById('errorIndicator').classList.remove('hidden');
+            document.getElementById('errorMessage').textContent = message;
+        }
+        updateNavButtons() {
+            document.getElementById('btnBack').disabled = this.historyIndex <= 0;
+            document.getElementById('btnForward').disabled = this.historyIndex >= this.history.length - 1;
+            document.getElementById('btnUp').disabled = this.currentPath === '/';
+        }
+        updateSidebar() {
+            document.querySelectorAll('.sidebar-item').forEach(item => {
+                item.classList.toggle('active', item.dataset.path === this.currentPath);
+            });
+            this.updateFolderTreeSelection();
+        }
+        renderBreadcrumb() {
+            const parts = this.currentPath === '/' ? [''] : this.currentPath.split('/');
+            const breadcrumb = document.getElementById('breadcrumb');
+            breadcrumb.innerHTML = parts.map((part, i) => {
+                const path = parts.slice(0, i + 1).join('/') || '/';
+                const name = part || '根目录';
+                const isLast = i === parts.length - 1;
+                return `
+                        <span class="breadcrumb-item px-2 py-1 rounded cursor-pointer hover:bg-gray-100 ${isLast ? 'font-medium' : ''}" data-path="${path}">
+                            ${name}
+                        </span>
+                        ${!isLast ? '<i class="ri-arrow-right-s-line text-gray-400"></i>' : ''}
+                    `;
+            }).join('');
+            breadcrumb.querySelectorAll('.breadcrumb-item').forEach(item => {
+                item.onclick = () => this.navigateTo(item.dataset.path);
+            });
+            document.getElementById('currentPath').textContent = this.currentPath;
+        }
+        renderFiles() {
+            let items = [...this.files];
+
+            // Search filter
+            if (this.searchQuery) {
+                items = items.filter(item => item.name.toLowerCase().includes(this.searchQuery));
+            }
+
+            // Sort: folders first, then files
+            items.sort((a, b) => {
+                if (a.type === b.type) return a.name.localeCompare(b.name);
+                return a.type === 'folder' ? -1 : 1;
+            });
+            const list = document.getElementById('fileList');
+
+            if (items.length === 0) {
+                list.innerHTML = '';
+                document.getElementById('emptyIndicator').classList.remove('hidden');
+            } else {
+                document.getElementById('emptyIndicator').classList.add('hidden');
+
+                if (this.viewMode === 'grid') {
+                    list.className = 'grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2';
+                    list.innerHTML = items.map(item => this.renderGridItem(item)).join('');
+                } else {
+                    list.className = 'flex flex-col';
+                    list.innerHTML = `
+                            <div class="grid grid-cols-12 gap-2 px-2 py-1 text-xs text-gray-500 border-b border-gray-200">
+                                <div class="col-span-6">名称</div>
+                                <div class="col-span-2">修改日期</div>
+                                <div class="col-span-2">类型</div>
+                                <div class="col-span-2 text-right">大小</div>
+                            </div>
+                            ${items.map(item => this.renderListItem(item)).join('')}
+                        `;
+                }
+                // Bind file item events
+                list.querySelectorAll('.file-item').forEach(el => {
+                    el.onclick = (e) => this.handleItemClick(e, el.dataset.path);
+                    el.ondblclick = () => this.openItem(el.dataset.path);
+                    el.oncontextmenu = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!this.selectedItems.includes(el.dataset.path)) {
+                            this.selectItem(el.dataset.path, false);
+                        }
+                        this.showContextMenu(e.clientX, e.clientY);
+                    };
+                });
+            }
+            // Update status bar
+            document.getElementById('itemCount').textContent = `${items.length} 个项目`;
+        }
+        renderGridItem(item) {
+            const icon = this.getFileIcon(item);
+            const selected = this.selectedItems.includes(item.path) ? 'selected' : '';
+            const typeLabel = item.type === 'folder' ? '文件夹' : '文件';
+            return `
+                    <div class="file-item p-2 rounded border border-transparent cursor-pointer flex flex-col items-center ${selected}" data-path="${item.path}" role="button" aria-label="${item.name} ${typeLabel}">
+                        <i class="${icon} text-4xl mb-1"></i>
+                        <span class="text-center text-xs break-all line-clamp-2">${item.name}</span>
+                    </div>
+                `;
+        }
+        renderListItem(item) {
+            const icon = this.getFileIcon(item);
+            const selected = this.selectedItems.includes(item.path) ? 'selected' : '';
+            const type = item.type === 'folder' ? '文件夹' : this.getFileType(item.name);
+            const size = item.type === 'folder' ? '' : item.sizeFormatted || this.formatSize(item.size);
+            return `
+                    <div class="file-item grid grid-cols-12 gap-2 px-2 py-1.5 rounded border border-transparent cursor-pointer items-center ${selected}" data-path="${item.path}" role="button" aria-label="${item.name} ${type}">
+                        <div class="col-span-6 flex items-center gap-2 min-w-0">
+                            <i class="${icon} text-lg flex-shrink-0"></i>
+                            <span class="truncate">${item.name}</span>
+                        </div>
+                        <div class="col-span-2 text-gray-500 text-xs">${item.modified || ''}</div>
+                        <div class="col-span-2 text-gray-500 text-xs">${type}</div>
+                        <div class="col-span-2 text-gray-500 text-xs text-right">${size}</div>
+                    </div>
+                `;
+        }
+        getFileIcon(item) {
+            if (item.type === 'folder') return 'ri-folder-fill text-yellow-500';
+
+            const ext = item.name.split('.').pop().toLowerCase();
+            const icons = {
+                'pdf': 'ri-file-pdf-line text-red-500',
+                'doc': 'ri-file-word-line text-blue-600',
+                'docx': 'ri-file-word-line text-blue-600',
+                'xls': 'ri-file-excel-line text-green-600',
+                'xlsx': 'ri-file-excel-line text-green-600',
+                'ppt': 'ri-file-ppt-line text-orange-500',
+                'pptx': 'ri-file-ppt-line text-orange-500',
+                'txt': 'ri-file-text-line text-gray-500',
+                'md': 'ri-markdown-line text-gray-600',
+                'jpg': 'ri-image-line text-purple-500',
+                'jpeg': 'ri-image-line text-purple-500',
+                'png': 'ri-image-line text-purple-500',
+                'gif': 'ri-image-line text-purple-500',
+                'svg': 'ri-image-line text-purple-500',
+                'mp4': 'ri-video-line text-pink-500',
+                'avi': 'ri-video-line text-pink-500',
+                'mkv': 'ri-video-line text-pink-500',
+                'mov': 'ri-video-line text-pink-500',
+                'mp3': 'ri-music-line text-cyan-500',
+                'wav': 'ri-music-line text-cyan-500',
+                'flac': 'ri-music-line text-cyan-500',
+                'zip': 'ri-file-zip-line text-yellow-600',
+                'rar': 'ri-file-zip-line text-yellow-600',
+                '7z': 'ri-file-zip-line text-yellow-600',
+                'tar': 'ri-file-zip-line text-yellow-600',
+                'gz': 'ri-file-zip-line text-yellow-600',
+                'html': 'ri-html5-line text-orange-500',
+                'css': 'ri-css3-line text-blue-500',
+                'js': 'ri-javascript-line text-yellow-500',
+                'ts': 'ri-file-code-line text-blue-500',
+                'tsx': 'ri-reactjs-line text-cyan-400',
+                'jsx': 'ri-reactjs-line text-cyan-400',
+                'vue': 'ri-vuejs-line text-green-500',
+                'py': 'ri-file-code-line text-green-500',
+                'java': 'ri-file-code-line text-red-500',
+                'go': 'ri-file-code-line text-cyan-500',
+                'rs': 'ri-file-code-line text-orange-500',
+                'json': 'ri-braces-line text-gray-600',
+                'xml': 'ri-file-code-line text-orange-400',
+                'yaml': 'ri-file-code-line text-red-400',
+                'yml': 'ri-file-code-line text-red-400',
+                'sql': 'ri-database-2-line text-blue-500',
+                'sh': 'ri-terminal-line text-gray-600',
+                'bat': 'ri-terminal-line text-gray-600',
+                'exe': 'ri-apps-line text-gray-600',
+                'dll': 'ri-settings-3-line text-gray-500'
+            };
+            return icons[ext] || 'ri-file-line text-gray-400';
+        }
+        getFileType(name) {
+            const ext = name.split('.').pop().toLowerCase();
+            const types = {
+                'pdf': 'PDF 文档', 'doc': 'Word 文档', 'docx': 'Word 文档',
+                'xls': 'Excel 表格', 'xlsx': 'Excel 表格',
+                'ppt': 'PPT 演示文稿', 'pptx': 'PPT 演示文稿',
+                'txt': '文本文件', 'md': 'Markdown 文档',
+                'jpg': 'JPEG 图片', 'jpeg': 'JPEG 图片', 'png': 'PNG 图片',
+                'gif': 'GIF 图片', 'svg': 'SVG 图片',
+                'mp4': 'MP4 视频', 'avi': 'AVI 视频', 'mkv': 'MKV 视频',
+                'mp3': 'MP3 音频', 'wav': 'WAV 音频',
+                'zip': 'ZIP 压缩包', 'rar': 'RAR 压缩包', '7z': '7Z 压缩包',
+                'html': 'HTML 文件', 'css': 'CSS 样式表', 'js': 'JavaScript 文件',
+                'json': 'JSON 文件', 'py': 'Python 脚本', 'rs': 'Rust 文件'
+            };
+            return types[ext] || ext.toUpperCase() + ' 文件';
+        }
+        formatSize(bytes) {
+            if (!bytes || bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+        handleItemClick(e, path) {
+            e.stopPropagation();
+            this.selectItem(path, e.ctrlKey || e.metaKey);
+        }
+        selectItem(path, multi) {
+            if (multi) {
+                const idx = this.selectedItems.indexOf(path);
+                if (idx > -1) {
+                    this.selectedItems.splice(idx, 1);
+                } else {
+                    this.selectedItems.push(path);
+                }
+            } else {
+                this.selectedItems = [path];
+            }
+            this.renderFiles();
+            this.updateToolbarButtons();
+        }
+        clearSelection() {
+            this.selectedItems = [];
+            this.updateToolbarButtons();
+            document.getElementById('selectedCount').textContent = '未选择';
+        }
+        updateToolbarButtons() {
+            const hasSelection = this.selectedItems.length > 0;
+            const hasSingleSelection = this.selectedItems.length === 1;
+            const hasClipboard = this.clipboard.items.length > 0;
+            const hasFile = hasSelection && this.selectedItems.some(p => {
+                const f = this.files.find(f => f.path === p);
+                return f && f.type === 'file';
+            });
+            document.getElementById('btnDownload').disabled = !hasFile;
+            document.getElementById('btnCut').disabled = !hasSelection;
+            document.getElementById('btnCopy').disabled = !hasSelection;
+            document.getElementById('btnPaste').disabled = !hasClipboard;
+            document.getElementById('btnRename').disabled = !hasSingleSelection;
+            document.getElementById('btnDelete').disabled = !hasSelection;
+            document.getElementById('selectedCount').textContent = hasSelection
+                ? `已选择 ${this.selectedItems.length} 项`
+                : '未选择';
+        }
+        openItem(path) {
+            const item = this.files.find(f => f.path === path);
+            if (item && item.type === 'folder') {
+                this.navigateTo(path);
+            } else {
+                this.api.downloadFile(path);
+            }
+        }
+        setViewMode(mode) {
+            this.viewMode = mode;
+            document.getElementById('btnViewGrid').classList.toggle('bg-gray-100', mode === 'grid');
+            document.getElementById('btnViewList').classList.toggle('bg-gray-100', mode === 'list');
+            this.renderFiles();
+        }
+        showContextMenu(x, y) {
+            const menu = document.getElementById('contextMenu');
+            menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
+            menu.style.top = Math.min(y, window.innerHeight - 300) + 'px';
+            menu.classList.remove('hidden');
+            menu.querySelector('[data-action="paste"]').classList.toggle('opacity-50', this.clipboard.items.length === 0);
+        }
+        showFolderContextMenu(x, y) {
+            const menu = document.getElementById('folderContextMenu');
+            menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
+            menu.style.top = Math.min(y, window.innerHeight - 200) + 'px';
+            menu.classList.remove('hidden');
+            menu.querySelector('[data-action="paste"]').classList.toggle('opacity-50', this.clipboard.items.length === 0);
+        }
+        hideContextMenus() {
+            document.getElementById('contextMenu').classList.add('hidden');
+            document.getElementById('folderContextMenu').classList.add('hidden');
+        }
+        handleContextAction(action) {
+            switch (action) {
+                case 'open': this.openItem(this.selectedItems[0]); break;
+                case 'download': this.downloadSelected(); break;
+                case 'cut': this.cutSelected(); break;
+                case 'copy': this.copySelected(); break;
+                case 'paste': this.paste(); break;
+                case 'rename': this.showRenameModal(); break;
+                case 'moveTo': this.showMoveModal(); break;
+                case 'copyTo': this.showCopyToModal(); break;
+                case 'delete': this.deleteSelected(); break;
+                case 'properties': this.showPropertiesModal(); break;
+                case 'newFolder': this.showNewFolderModal(); break;
+                case 'upload': document.getElementById('fileInput').click(); break;
+                case 'refresh': this.refresh(); break;
+            }
+        }
+        cutSelected() {
+            this.clipboard = { items: [...this.selectedItems], mode: 'cut' };
+            this.updateToolbarButtons();
+            this.showToast(`已剪切 ${this.selectedItems.length} 项`);
+        }
+        copySelected() {
+            this.clipboard = { items: [...this.selectedItems], mode: 'copy' };
+            this.updateToolbarButtons();
+            this.showToast(`已复制 ${this.selectedItems.length} 项`);
+        }
+        async paste() {
+            if (this.clipboard.items.length === 0) return;
+            let success = 0, failed = 0;
+
+            for (const item of this.clipboard.items) {
+                try {
+                    if (this.clipboard.mode === 'cut') {
+                        await this.api.move(item, this.currentPath);
+                    } else {
+                        await this.api.copy(item, this.currentPath);
+                    }
+                    success++;
+                } catch (e) {
+                    failed++;
+                }
+            }
+
+            if (this.clipboard.mode === 'cut') {
+                this.clipboard = { items: [], mode: null };
+            }
+
+            await this.refresh();
+            this.updateToolbarButtons();
+            this.showToast(failed > 0 ? `已粘贴 ${success} 项，${failed} 项失败` : `已粘贴 ${success} 项`);
+        }
+        deleteSelected() {
+            if (this.selectedItems.length === 0) return;
+
+            this.showModal('确认删除', `
+                    <p class="text-gray-600">确定要删除选中的 ${this.selectedItems.length} 项吗？</p>
+                    <p class="text-sm text-red-500 mt-2">此操作无法撤销</p>
+                `, async () => {
+                let success = 0;
+                for (const path of this.selectedItems) {
+                    try {
+                        await this.api.delete(path);
+                        success++;
+                    } catch (e) {}
+                }
+                this.clearSelection();
+                await this.refresh();
+                this.showToast(`已删除 ${success} 项`);
+            });
+        }
+        downloadSelected() {
+            const files = this.selectedItems.filter(p => {
+                const f = this.files.find(f => f.path === p);
+                return f && f.type === 'file';
+            });
+            files.forEach(path => this.api.downloadFile(path));
+            this.showToast(`正在下载 ${files.length} 个文件`);
+        }
+        showModal(title, body, onConfirm) {
+            const modal = document.getElementById('modal');
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalBody').innerHTML = body;
+            modal.classList.remove('hidden');
+            
+            const confirmBtn = document.getElementById('modalConfirm');
+            const cancelBtn = document.getElementById('modalCancel');
+            
+            // Remove old handlers
+            confirmBtn.onclick = null;
+            cancelBtn.onclick = null;
+            
+            // Set new handlers
+            confirmBtn.onclick = () => {
+                onConfirm();
+                this.hideModal();
+            };
+            cancelBtn.onclick = () => this.hideModal();
+            
+            // Keyboard handler for modal
+            this.modalKeyHandler = (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this.hideModal();
+                } else if (e.key === 'Enter') {
+                    // Only trigger confirm if not in a textarea or select
+                    const activeEl = document.activeElement;
+                    const isTextarea = activeEl && activeEl.tagName === 'TEXTAREA';
+                    const isSelect = activeEl && activeEl.tagName === 'SELECT';
+                    if (!isTextarea && !isSelect) {
+                        e.preventDefault();
+                        onConfirm();
+                        this.hideModal();
+                    }
+                }
+            };
+            document.addEventListener('keydown', this.modalKeyHandler);
+            
+            // Focus confirm button for keyboard accessibility
+            setTimeout(() => {
+                // Focus first input if exists, otherwise focus confirm button
+                const firstInput = modal.querySelector('input:not([type="hidden"]), select, textarea');
+                if (firstInput) {
+                    firstInput.focus();
+                    if (firstInput.select) firstInput.select();
+                } else {
+                    confirmBtn.focus();
+                }
+            }, 100);
+        }
+        hideModal() {
+            document.getElementById('modal').classList.add('hidden');
+            // Remove keyboard handler
+            if (this.modalKeyHandler) {
+                document.removeEventListener('keydown', this.modalKeyHandler);
+                this.modalKeyHandler = null;
+            }
+        }
+        showNewFolderModal() {
+            this.showModal('新建文件夹', `
+                    <input type="text" id="newFolderName" class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500" placeholder="文件夹名称" value="新建文件夹">
+                `, async () => {
+                const name = document.getElementById('newFolderName').value.trim();
+                if (name) {
+                    try {
+                        await this.api.createFolder(this.currentPath, name);
+                        await this.refresh();
+                        this.showToast('文件夹创建成功');
+                    } catch (e) {
+                        this.showToast('创建失败: ' + e.message);
+                    }
+                }
+            });
+            setTimeout(() => {
+                const input = document.getElementById('newFolderName');
+                input.focus();
+                input.select();
+            }, 100);
+        }
+        showRenameModal() {
+            if (this.selectedItems.length !== 1) return;
+            const oldName = this.selectedItems[0].split('/').pop();
+
+            this.showModal('重命名', `
+                    <input type="text" id="newName" class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500" value="${oldName}">
+                `, async () => {
+                const newName = document.getElementById('newName').value.trim();
+                if (newName && newName !== oldName) {
+                    try {
+                        await this.api.rename(this.selectedItems[0], newName);
+                        this.clearSelection();
+                        await this.refresh();
+                        this.showToast('重命名成功');
+                    } catch (e) {
+                        this.showToast('重命名失败: ' + e.message);
+                    }
+                }
+            });
+            setTimeout(() => {
+                const input = document.getElementById('newName');
+                input.focus();
+                const dotIndex = oldName.lastIndexOf('.');
+                input.setSelectionRange(0, dotIndex > -1 ? dotIndex : oldName.length);
+            }, 100);
+        }
+        showMoveModal() {
+            this.showFolderPickerModal('移动到', async (targetPath) => {
+                let success = 0;
+                for (const item of this.selectedItems) {
+                    try {
+                        await this.api.move(item, targetPath);
+                        success++;
+                    } catch (e) {}
+                }
+                this.clearSelection();
+                await this.refresh();
+                await this.loadFolderTree();
+                this.showToast(`已移动 ${success} 项`);
+            });
+        }
+        showCopyToModal() {
+            this.showFolderPickerModal('复制到', async (targetPath) => {
+                let success = 0;
+                for (const item of this.selectedItems) {
+                    try {
+                        await this.api.copy(item, targetPath);
+                        success++;
+                    } catch (e) {}
+                }
+                this.clearSelection();
+                await this.refresh();
+                this.showToast(`已复制 ${success} 项`);
+            });
+        }
+        // Folder picker modal with expandable tree
+        showFolderPickerModal(title, onConfirm) {
+            this.selectedTargetPath = '/';
+            
+            this.showModal(title, `
+                <div class="folder-picker border border-gray-200 rounded bg-gray-50 max-h-64 overflow-y-auto">
+                    <div id="folderPickerTree" class="p-2"></div>
+                </div>
+                <div class="mt-2 text-sm">
+                    <span class="text-gray-500">目标:</span>
+                    <span id="selectedTargetDisplay" class="text-blue-600 font-medium">/</span>
+                </div>
+            `, async () => {
+                if (!this.selectedTargetPath) {
+                    this.showToast('请选择目标文件夹');
+                    return;
+                }
+                await onConfirm(this.selectedTargetPath);
+            });
+            
+            // Build the tree
+            this.buildFolderPickerTree();
+        }
+        async buildFolderPickerTree() {
+            const container = document.getElementById('folderPickerTree');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            // Add root folder
+            const rootDiv = document.createElement('div');
+            rootDiv.className = 'picker-node';
+            rootDiv.dataset.path = '/';
+            rootDiv.innerHTML = `
+                <div class="picker-item flex items-center gap-1 py-1.5 px-2 rounded cursor-pointer text-sm hover:bg-gray-100 selected" data-path="/">
+                    <i class="picker-toggle ri-arrow-right-s-fill text-gray-400 text-base cursor-pointer transition-transform"></i>
+                    <i class="ri-home-4-fill text-blue-500"></i>
+                    <span class="flex-1">根目录</span>
+                </div>
+                <div class="picker-children pl-4" data-parent="/"></div>
+            `;
+            container.appendChild(rootDiv);
+            
+            // Bind events for root
+            this.bindPickerNodeEvents(rootDiv, 0);
+            
+            // Load root level
+            await this.loadPickerLevel(rootDiv.querySelector('.picker-children'), '/', 1);
+            
+            // Auto expand root
+            const toggle = rootDiv.querySelector('.picker-toggle');
+            toggle.classList.add('expanded');
+            rootDiv.querySelector('.picker-children').classList.remove('hidden');
+        }
+        async loadPickerLevel(container, path, level) {
+            try {
+                const { files } = await this.api.getFiles(path);
+                const folders = files.filter(f => f.type === 'folder' && !this.selectedItems.includes(f.path))
+                    .sort((a, b) => a.name.localeCompare(b.name));
+                
+                for (const folder of folders) {
+                    const nodeDiv = document.createElement('div');
+                    nodeDiv.className = 'picker-node';
+                    nodeDiv.dataset.path = folder.path;
+                    nodeDiv.dataset.loaded = 'false';
+                    
+                    nodeDiv.innerHTML = `
+                        <div class="picker-item flex items-center gap-1 py-1 px-2 rounded cursor-pointer text-sm hover:bg-gray-100" data-path="${folder.path}">
+                            <i class="picker-toggle ri-arrow-right-s-fill text-gray-400 text-sm cursor-pointer transition-transform"></i>
+                            <i class="ri-folder-fill text-yellow-500 text-sm"></i>
+                            <span class="flex-1 truncate">${folder.name}</span>
+                        </div>
+                        <div class="picker-children pl-4 hidden" data-parent="${folder.path}"></div>
+                    `;
+                    container.appendChild(nodeDiv);
+                    this.bindPickerNodeEvents(nodeDiv, level);
+                }
+                
+                if (folders.length === 0) {
+                    // Hide parent toggle if no children
+                    const parentNode = container.closest('.picker-node');
+                    if (parentNode) {
+                        const toggle = parentNode.querySelector(':scope > .picker-item > .picker-toggle');
+                        if (toggle) toggle.style.visibility = 'hidden';
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to load picker level:', e);
+            }
+        }
+        bindPickerNodeEvents(nodeDiv, level) {
+            const toggle = nodeDiv.querySelector(':scope > .picker-item > .picker-toggle');
+            const item = nodeDiv.querySelector(':scope > .picker-item');
+            const children = nodeDiv.querySelector(':scope > .picker-children');
+            const path = nodeDiv.dataset.path;
+            
+            // Toggle expand/collapse
+            toggle.onclick = async (e) => {
+                e.stopPropagation();
+                const isExpanded = toggle.classList.contains('expanded');
+                
+                if (isExpanded) {
+                    toggle.classList.remove('expanded');
+                    children.classList.add('hidden');
+                } else {
+                    toggle.classList.add('expanded');
+                    children.classList.remove('hidden');
+                    
+                    if (nodeDiv.dataset.loaded === 'false') {
+                        children.innerHTML = '<div class="text-xs text-gray-400 py-1 px-2">加载中...</div>';
+                        await this.loadPickerLevel(children, path, level + 1);
+                        children.querySelector('.text-gray-400')?.remove();
+                        nodeDiv.dataset.loaded = 'true';
+                    }
+                }
+            };
+            
+            // Select folder
+            item.onclick = () => {
+                // Remove previous selection
+                document.querySelectorAll('#folderPickerTree .picker-item.selected').forEach(el => {
+                    el.classList.remove('selected', 'bg-blue-100');
+                });
+                // Add selection
+                item.classList.add('selected', 'bg-blue-100');
+                this.selectedTargetPath = path;
+                document.getElementById('selectedTargetDisplay').textContent = path;
+            };
+        }
+        async showPropertiesModal() {
+            if (this.selectedItems.length !== 1) return;
+            const path = this.selectedItems[0];
+
+            try {
+                const { info } = await this.api.getInfo(path);
+                this.showModal('属性', `
+                        <div class="space-y-3">
+                            <div class="flex items-center gap-3 pb-3 border-b border-gray-200">
+                                <i class="${this.getFileIcon(info)} text-4xl"></i>
+                                <span class="font-medium">${info.name}</span>
+                            </div>
+                            <div class="grid grid-cols-3 gap-2 text-sm">
+                                <span class="text-gray-500">类型:</span>
+                                <span class="col-span-2">${info.type === 'folder' ? '文件夹' : this.getFileType(info.name)}</span>
+                                <span class="text-gray-500">位置:</span>
+                                <span class="col-span-2">${path.substring(0, path.lastIndexOf('/')) || '/'}</span>
+                                <span class="text-gray-500">大小:</span>
+                                <span class="col-span-2">${info.sizeFormatted}</span>
+                                ${info.type === 'folder' ? `
+                                    <span class="text-gray-500">包含:</span>
+                                    <span class="col-span-2">${info.children || 0} 项</span>
+                                ` : ''}
+                                <span class="text-gray-500">修改时间:</span>
+                                <span class="col-span-2">${info.modified || '-'}</span>
+                                <span class="text-gray-500">创建时间:</span>
+                                <span class="col-span-2">${info.created || '-'}</span>
+                            </div>
+                        </div>
+                    `, () => {});
+            } catch (e) {
+                this.showToast('获取属性失败: ' + e.message);
+            }
+        }
+        async uploadFiles(fileList) {
+            if (!fileList.length) return;
+
+            const progress = document.getElementById('uploadProgress');
+            progress.classList.remove('hidden');
+
+            const files = Array.from(fileList);
+            const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+            
+            document.getElementById('uploadFileName').textContent = files.length === 1
+                ? files[0].name : `${files.length} 个文件`;
+            document.getElementById('uploadStatus').textContent = '准备上传...';
+            
+            // Show file size warning for large files
+            if (totalSize > 100 * 1024 * 1024) { // > 100MB
+                document.getElementById('uploadStatus').textContent = 
+                    `大文件上传中，请耐心等待... (${this.formatSize(totalSize)})`;
+            }
+
+            try {
+                await this.api.uploadFiles(
+                    this.currentPath, 
+                    files, 
+                    // Progress callback with speed
+                    (loaded, total, speed) => {
+                        const percent = Math.round(loaded / total * 100);
+                        document.getElementById('uploadPercent').textContent = percent + '%';
+                        document.getElementById('uploadBar').style.width = percent + '%';
+                        
+                        // Calculate remaining time
+                        const remaining = speed > 0 ? (total - loaded) / speed : 0;
+                        const remainingStr = remaining > 60 
+                            ? `${Math.round(remaining / 60)} 分钟` 
+                            : `${Math.round(remaining)} 秒`;
+                        
+                        const speedStr = this.formatSize(speed) + '/s';
+                        document.getElementById('uploadStatus').textContent =
+                            `${this.formatSize(loaded)} / ${this.formatSize(total)} · ${speedStr} · 剩余 ${remainingStr}`;
+                    },
+                    // Status change callback (for retry messages)
+                    (status) => {
+                        document.getElementById('uploadStatus').textContent = status;
+                    }
+                );
+
+                document.getElementById('uploadStatus').textContent = '上传完成!';
+                document.getElementById('uploadBar').classList.add('bg-green-500');
+                document.getElementById('uploadBar').classList.remove('bg-blue-500');
+                await this.refresh();
+                this.showToast(`已上传 ${files.length} 个文件`);
+                setTimeout(() => {
+                    progress.classList.add('hidden');
+                    document.getElementById('uploadBar').classList.remove('bg-green-500');
+                    document.getElementById('uploadBar').classList.add('bg-blue-500');
+                }, 2000);
+            } catch (e) {
+                document.getElementById('uploadStatus').textContent = '上传失败: ' + e.message;
+                document.getElementById('uploadBar').classList.add('bg-red-500');
+                document.getElementById('uploadBar').classList.remove('bg-blue-500');
+                this.showToast('上传失败: ' + e.message);
+                // Auto-hide after showing error message for 5 seconds
+                setTimeout(() => {
+                    progress.classList.add('hidden');
+                    document.getElementById('uploadBar').classList.remove('bg-red-500');
+                    document.getElementById('uploadBar').classList.add('bg-blue-500');
+                    document.getElementById('uploadBar').style.width = '0%';
+                    document.getElementById('uploadPercent').textContent = '0%';
+                }, 5000);
+            }
+
+            document.getElementById('fileInput').value = '';
+        }
+        handleKeyboard(e) {
+            // Skip if modal is open (modal has its own keyboard handler)
+            if (!document.getElementById('modal').classList.contains('hidden')) return;
+            
+            // Skip if typing in an input field
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+                return;
+            }
+
+            if (e.key === 'Delete') {
+                this.deleteSelected();
+            } else if (e.key === 'F2' && this.selectedItems.length === 1) {
+                e.preventDefault();
+                this.showRenameModal();
+            } else if (e.key === 'F5') {
+                e.preventDefault();
+                this.refresh();
+            } else if (e.ctrlKey || e.metaKey) {
+                if (e.key === 'c') { e.preventDefault(); this.copySelected(); }
+                else if (e.key === 'x') { e.preventDefault(); this.cutSelected(); }
+                else if (e.key === 'v') { e.preventDefault(); this.paste(); }
+                else if (e.key === 'a') {
+                    e.preventDefault();
+                    this.selectedItems = this.files.map(f => f.path);
+                    this.renderFiles();
+                    this.updateToolbarButtons();
+                }
+            } else if (e.key === 'Backspace') {
+                e.preventDefault();
+                this.goUp();
+            } else if (e.key === 'Enter' && this.selectedItems.length === 1) {
+                this.openItem(this.selectedItems[0]);
+            }
+        }
+        showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'fixed bottom-16 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg z-50 text-sm';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2500);
+        }
+        // === Folder Tree (Expandable) ===
+        async loadFolderTree() {
+            const container = document.getElementById('folderTree');
+            container.innerHTML = '';
+            // Load root level folders
+            await this.loadTreeLevel(container, '/', 0);
+            this.updateFolderTreeSelection();
+        }
+        async loadTreeLevel(container, path, level) {
+            try {
+                const { files } = await this.api.getFiles(path);
+                const folders = files.filter(f => f.type === 'folder').sort((a, b) => a.name.localeCompare(b.name));
+                
+                for (const folder of folders) {
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'tree-node';
+                    itemDiv.dataset.path = folder.path;
+                    itemDiv.dataset.loaded = 'false';
+                    
+                    const paddingLeft = level * 16 + 4;
+                    itemDiv.innerHTML = `
+                        <div class="tree-item flex items-center gap-1 py-1 rounded cursor-pointer text-xs ${this.currentPath === folder.path ? 'active' : ''}" 
+                             data-path="${folder.path}" style="padding-left: ${paddingLeft}px">
+                            <i class="tree-toggle ri-arrow-right-s-fill text-gray-400 text-sm cursor-pointer transition-transform" data-path="${folder.path}"></i>
+                            <i class="ri-folder-fill text-yellow-500 text-sm"></i>
+                            <span class="truncate flex-1">${folder.name}</span>
+                        </div>
+                        <div class="tree-children hidden" data-parent="${folder.path}"></div>
+                    `;
+                    container.appendChild(itemDiv);
+                    
+                    // Bind expand/collapse
+                    const toggle = itemDiv.querySelector('.tree-toggle');
+                    toggle.onclick = (e) => {
+                        e.stopPropagation();
+                        this.toggleTreeNode(itemDiv, level + 1);
+                    };
+                    
+                    // Bind navigation
+                    const treeItem = itemDiv.querySelector('.tree-item');
+                    treeItem.onclick = () => this.navigateTo(folder.path);
+                }
+            } catch (e) {
+                console.error('Failed to load tree level:', e);
+            }
+        }
+        async toggleTreeNode(nodeDiv, level) {
+            const toggle = nodeDiv.querySelector('.tree-toggle');
+            const children = nodeDiv.querySelector('.tree-children');
+            const path = nodeDiv.dataset.path;
+            const isExpanded = toggle.classList.contains('expanded');
+            
+            if (isExpanded) {
+                // Collapse
+                toggle.classList.remove('expanded');
+                children.classList.add('hidden');
+            } else {
+                // Expand
+                toggle.classList.add('expanded');
+                children.classList.remove('hidden');
+                
+                // Load children if not loaded
+                if (nodeDiv.dataset.loaded === 'false') {
+                    children.innerHTML = '<div class="text-xs text-gray-400 py-1" style="padding-left: ' + (level * 16 + 4) + 'px">加载中...</div>';
+                    await this.loadTreeLevel(children, path, level);
+                    children.querySelector('.text-gray-400')?.remove();
+                    nodeDiv.dataset.loaded = 'true';
+                    
+                    // If no children, hide toggle
+                    if (children.children.length === 0) {
+                        toggle.style.visibility = 'hidden';
+                    }
+                }
+            }
+        }
+        updateFolderTreeSelection() {
+            document.querySelectorAll('#folderTree .tree-item').forEach(item => {
+                item.classList.toggle('active', item.dataset.path === this.currentPath);
+            });
+            // Auto-expand to current path
+            this.expandToPath(this.currentPath);
+        }
+        async expandToPath(targetPath) {
+            if (!targetPath || targetPath === '/') return;
+            
+            const parts = targetPath.split('/').filter(p => p);
+            let currentPath = '';
+            
+            for (const part of parts) {
+                currentPath += '/' + part;
+                const node = document.querySelector(`#folderTree .tree-node[data-path="${currentPath}"]`);
+                if (node) {
+                    const toggle = node.querySelector('.tree-toggle');
+                    if (toggle && !toggle.classList.contains('expanded')) {
+                        // Get level from padding
+                        const treeItem = node.querySelector('.tree-item');
+                        const paddingLeft = parseInt(treeItem.style.paddingLeft) || 4;
+                        const level = Math.floor((paddingLeft - 4) / 16) + 1;
+                        await this.toggleTreeNode(node, level);
+                    }
+                }
+            }
+            // Update selection after expansion
+            document.querySelectorAll('#folderTree .tree-item').forEach(item => {
+                item.classList.toggle('active', item.dataset.path === this.currentPath);
+            });
+        }
+        // === Lock Screen ===
+        lock() {
+            // Clear stored credentials
+            localStorage.removeItem('filest_auth');
+            this.api.authHeader = null;
+            
+            // Show lock screen
+            this.showLockScreen();
+        }
+        showLockScreen() {
+            // Create lock overlay
+            const lockOverlay = document.createElement('div');
+            lockOverlay.id = 'lockScreen';
+            lockOverlay.className = 'fixed inset-0 bg-gray-900/95 z-[100] flex items-center justify-center';
+            lockOverlay.innerHTML = `
+                <div class="bg-white rounded-xl shadow-2xl w-96 max-w-full mx-4 overflow-hidden">
+                    <div class="bg-gradient-to-r from-blue-500 to-blue-600 px-6 py-8 text-center">
+                        <i class="ri-lock-fill text-white text-5xl"></i>
+                        <h2 class="text-white text-xl font-medium mt-3">已锁定</h2>
+                        <p class="text-blue-100 text-sm mt-1">请输入凭据解锁</p>
+                    </div>
+                    <div class="p-6 space-y-4">
+                        <div>
+                            <label class="block text-sm text-gray-600 mb-1">用户名</label>
+                            <input type="text" id="unlockUsername" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" placeholder="用户名">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-600 mb-1">密码</label>
+                            <input type="password" id="unlockPassword" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500" placeholder="密码">
+                        </div>
+                        <button id="unlockBtn" class="w-full py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium">
+                            <i class="ri-lock-unlock-line mr-1"></i> 解锁
+                        </button>
+                        <p id="unlockError" class="text-red-500 text-sm text-center hidden"></p>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(lockOverlay);
+            
+            // Focus username input
+            setTimeout(() => document.getElementById('unlockUsername').focus(), 100);
+            
+            // Bind unlock events
+            const tryUnlock = async () => {
+                const username = document.getElementById('unlockUsername').value;
+                const password = document.getElementById('unlockPassword').value;
+                const errorEl = document.getElementById('unlockError');
+                
+                if (!username || !password) {
+                    errorEl.textContent = '请输入用户名和密码';
+                    errorEl.classList.remove('hidden');
+                    return;
+                }
+                
+                this.api.setAuth(username, password);
+                try {
+                    await this.api.getDiskInfo();
+                    // Success - save credentials and remove lock screen
+                    localStorage.setItem('filest_auth', JSON.stringify({ username, password }));
+                    lockOverlay.remove();
+                    this.showToast('已解锁');
+                } catch (e) {
+                    errorEl.textContent = '用户名或密码错误';
+                    errorEl.classList.remove('hidden');
+                    this.api.authHeader = null;
+                }
+            };
+            
+            document.getElementById('unlockBtn').onclick = tryUnlock;
+            document.getElementById('unlockPassword').onkeydown = (e) => {
+                if (e.key === 'Enter') tryUnlock();
+            };
+            document.getElementById('unlockUsername').onkeydown = (e) => {
+                if (e.key === 'Enter') document.getElementById('unlockPassword').focus();
+            };
+        }
+    }
+    // Initialize
+    const fm = new FileManager();
+</script>
+</body>
+</html>
