@@ -99,7 +99,7 @@ async fn main() {
         .allow_origin(Any)
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers(Any);
-    // API 路由（需要认证）
+    // API routes (require authentication)
     // Set upload limit to 500MB for large file uploads
     let api_routes = Router::new()
         .route("/files", get(handlers::get_files))
@@ -114,15 +114,15 @@ async fn main() {
         .route("/folders", get(handlers::get_folders))
         .route("/disk", get(handlers::get_disk_info))
         .route("/search", get(handlers::search_files))
-        .layer(DefaultBodyLimit::max(500 * 1024 * 1024)); // 500MB limit
-    // 主路由
-    let app = Router::new()
-        .route("/", get(serve_index))
-        .nest("/api", api_routes)
+        .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB limit
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
-        ))
+        ));
+    // Main routes - static resources don't require authentication
+    let app = Router::new()
+        .route("/", get(serve_index))
+        .nest("/api", api_routes)
         .layer(cors)
         .with_state(state);
     // 启动服务器
