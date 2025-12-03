@@ -1,6 +1,6 @@
 [package]
 name = "filest"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 authors = ["File Manager"]
 description = "A remote file manager server with web UI"

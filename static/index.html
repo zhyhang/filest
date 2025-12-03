@@ -197,6 +197,10 @@
         <i class="ri-download-line text-gray-500 w-4"></i>
         <span>下载</span>
     </div>
+    <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="copyLink">
+        <i class="ri-link text-gray-500 w-4"></i>
+        <span>复制下载链接</span>
+    </div>
     <div class="border-t border-gray-100 my-1"></div>
     <div class="context-item px-4 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-3" data-action="cut">
         <i class="ri-scissors-cut-line text-gray-500 w-4"></i>
@@ -449,7 +453,37 @@
             }
         }
         async downloadFile(path) {
-            window.open(`${this.baseUrl}/api/download?path=${encodeURIComponent(path)}`, '_blank');
+            try {
+                const options = {
+                    method: 'GET',
+                    headers: {}
+                };
+                if (this.authHeader) {
+                    options.headers['Authorization'] = this.authHeader;
+                }
+                
+                const response = await fetch(`${this.baseUrl}/api/download?path=${encodeURIComponent(path)}`, options);
+                
+                if (response.status === 401) {
+                    throw new Error('认证失败，请刷新页面重新登录');
+                }
+                if (!response.ok) {
+                    throw new Error('下载失败');
+                }
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = path.split('/').pop(); // Extract filename
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            } catch (e) {
+                console.error('Download error:', e);
+                throw e;
+            }
         }
         async rename(path, newName) {
             return this.request('PUT', '/api/rename', { path, newName });
@@ -1041,6 +1075,7 @@
             switch (action) {
                 case 'open': this.openItem(this.selectedItems[0]); break;
                 case 'download': this.downloadSelected(); break;
+                case 'copyLink': this.copyDownloadLink(); break;
                 case 'cut': this.cutSelected(); break;
                 case 'copy': this.copySelected(); break;
                 case 'paste': this.paste(); break;
@@ -1115,6 +1150,34 @@
             });
             files.forEach(path => this.api.downloadFile(path));
             this.showToast(`正在下载 ${files.length} 个文件`);
+        }
+        copyDownloadLink() {
+            const files = this.selectedItems.filter(p => {
+                const f = this.files.find(f => f.path === p);
+                return f && f.type === 'file';
+            });
+            if (files.length === 0) {
+                this.showToast('请选择文件');
+                return;
+            }
+            // Build download URLs
+            const baseUrl = window.location.origin;
+            const links = files.map(path => `${baseUrl}/api/download?path=${encodeURIComponent(path)}`);
+            const text = links.join('\n');
+            
+            // Copy to clipboard
+            navigator.clipboard.writeText(text).then(() => {
+                this.showToast(files.length === 1 ? '下载链接已复制' : `已复制 ${files.length} 个下载链接`);
+            }).catch(() => {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                this.showToast(files.length === 1 ? '下载链接已复制' : `已复制 ${files.length} 个下载链接`);
+            });
         }
         showModal(title, body, onConfirm) {
             const modal = document.getElementById('modal');
