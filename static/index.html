@@ -510,10 +510,194 @@
             return this.request('GET', `/api/search?query=${encodeURIComponent(query)}&path=${encodeURIComponent(path)}`);
         }
     }
+
+    // WebSocket Uploader for large files (bypasses Cloudflare 100MB limit)
+    class WebSocketUploader {
+        constructor(baseUrl = '') {
+            this.baseUrl = baseUrl;
+            this.ws = null;
+            // 1MB chunks - larger chunks reduce frame overhead over CF Tunnel
+            this.chunkSize = 1 * 1024 * 1024;
+            // 8MB buffer threshold - allow pipelining for better throughput
+            this.bufferThreshold = 8 * 1024 * 1024;
+            this.cancelled = false;
+        }
+
+        // Get WebSocket URL (ws:// or wss://)
+        getWsUrl(username, password) {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const auth = btoa(`${username}:${password}`);
+            return `${protocol}//${window.location.host}${this.baseUrl}/api/ws/upload?auth=${encodeURIComponent(auth)}`;
+        }
+
+        // Upload a single file via WebSocket
+        async upload(file, targetPath, username, password, onProgress, onStatusChange) {
+            this.cancelled = false;
+            
+            return new Promise((resolve, reject) => {
+                const wsUrl = this.getWsUrl(username, password);
+                
+                if (onStatusChange) onStatusChange('正在建立 WebSocket 连接...');
+                
+                this.ws = new WebSocket(wsUrl);
+                this.ws.binaryType = 'arraybuffer';
+
+                let uploadStarted = false;
+                let totalSent = 0;
+                let lastProgressTime = Date.now();
+                let lastSentBytes = 0;
+
+                this.ws.onopen = () => {
+                    if (onStatusChange) onStatusChange('连接已建立，正在初始化上传...');
+                    
+                    // Send init message
+                    this.ws.send(JSON.stringify({
+                        type: 'init',
+                        filename: file.name,
+                        size: file.size,
+                        path: targetPath
+                    }));
+                };
+
+                this.ws.onmessage = async (event) => {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        
+                        switch (msg.type) {
+                            case 'auth_required':
+                                // Send auth if required (fallback)
+                                this.ws.send(JSON.stringify({
+                                    type: 'auth',
+                                    username: username,
+                                    password: password
+                                }));
+                                break;
+
+                            case 'auth_ok':
+                                if (onStatusChange) onStatusChange('认证成功');
+                                break;
+
+                            case 'auth_failed':
+                                this.ws.close();
+                                reject(new Error('认证失败: ' + msg.message));
+                                break;
+
+                            case 'init_ok':
+                                if (onStatusChange) onStatusChange('开始上传文件...');
+                                uploadStarted = true;
+                                // Start sending file chunks (async, errors handled via promise)
+                                (async () => {
+                                    try {
+                                        await this.sendFileChunks(file, onProgress, onStatusChange);
+                                    } catch (err) {
+                                        this.ws.close();
+                                        reject(err);
+                                    }
+                                })();
+                                break;
+
+                            case 'progress':
+                                // Server confirmed progress
+                                const now = Date.now();
+                                const timeDiff = (now - lastProgressTime) / 1000;
+                                const bytesDiff = msg.received - lastSentBytes;
+                                const speed = timeDiff > 0 ? bytesDiff / timeDiff : 0;
+                                
+                                lastProgressTime = now;
+                                lastSentBytes = msg.received;
+                                
+                                if (onProgress) {
+                                    onProgress(msg.received, msg.total, speed);
+                                }
+                                break;
+
+                            case 'complete_ok':
+                                if (onStatusChange) onStatusChange('上传完成!');
+                                this.ws.close();
+                                resolve({ success: true, path: msg.path, size: msg.size });
+                                break;
+
+                            case 'error':
+                                this.ws.close();
+                                reject(new Error(`${msg.code}: ${msg.message}`));
+                                break;
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse WebSocket message:', e);
+                    }
+                };
+
+                this.ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    reject(new Error('WebSocket 连接错误'));
+                };
+
+                this.ws.onclose = (event) => {
+                    console.log('WebSocket closed:', event.code, event.reason, 'uploadStarted:', uploadStarted);
+                    if (!uploadStarted && !this.cancelled) {
+                        reject(new Error('WebSocket 连接意外关闭'));
+                    }
+                };
+            });
+        }
+
+        // Send file in chunks - pipelining mode for high throughput
+        async sendFileChunks(file, onProgress, onStatusChange) {
+            let offset = 0;
+            let chunkIndex = 0;
+            const totalChunks = Math.ceil(file.size / this.chunkSize);
+
+            while (offset < file.size && !this.cancelled) {
+                // Backpressure: only wait if buffer is very full (8MB threshold)
+                // This allows pipelining - keep sending while previous data is in flight
+                if (this.ws.bufferedAmount > this.bufferThreshold) {
+                    // Wait a bit for buffer to drain, but not too aggressively
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                    if (this.cancelled) return;
+                    continue; // Re-check buffer before sending
+                }
+
+                const chunk = file.slice(offset, offset + this.chunkSize);
+                const buffer = await chunk.arrayBuffer();
+                
+                this.ws.send(buffer);
+                
+                offset += chunk.size;
+                chunkIndex++;
+                
+                // Yield to event loop occasionally to process incoming progress messages
+                if (chunkIndex % 8 === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
+            }
+
+            if (!this.cancelled) {
+                // Wait for buffer to fully drain before sending complete
+                while (this.ws.bufferedAmount > 0) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                
+                // Send complete message
+                if (onStatusChange) onStatusChange('等待服务器确认...');
+                this.ws.send(JSON.stringify({ type: 'complete' }));
+            }
+        }
+
+        // Cancel upload
+        cancel() {
+            this.cancelled = true;
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send(JSON.stringify({ type: 'cancel' }));
+                this.ws.close();
+            }
+        }
+    }
+
     // File Manager App
     class FileManager {
         constructor() {
             this.api = new ApiClient('');
+            this.wsUploader = new WebSocketUploader('');
             this.currentPath = '/';
             this.files = [];
             this.selectedItems = [];
@@ -525,8 +709,32 @@
             this.isConnected = false;
             this.searchTimeout = null;
             this.selectedTargetPath = '/'; // For move/copy dialogs
+            this.credentials = { username: '', password: '' }; // Store for WS auth
+            
+            // Large file threshold: 90MB (Cloudflare limit is 100MB)
+            this.largeFileThreshold = 90 * 1024 * 1024;
 
             this.init();
+        }
+        
+        // Create progress callback for upload progress display
+        createProgressCallback(files) {
+            const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+            return (loaded, total, speed) => {
+                const percent = Math.round(loaded / total * 100);
+                document.getElementById('uploadPercent').textContent = percent + '%';
+                document.getElementById('uploadBar').style.width = percent + '%';
+                
+                // Calculate remaining time
+                const remaining = speed > 0 ? (total - loaded) / speed : 0;
+                const remainingStr = remaining > 60 
+                    ? `${Math.round(remaining / 60)} 分钟` 
+                    : `${Math.round(remaining)} 秒`;
+                
+                const speedStr = this.formatSize(speed) + '/s';
+                document.getElementById('uploadStatus').textContent =
+                    `${this.formatSize(loaded)} / ${this.formatSize(total)} · ${speedStr} · 剩余 ${remainingStr}`;
+            };
         }
         async init() {
             // Check for stored credentials or prompt for login
@@ -546,6 +754,7 @@
                 try {
                     const { username, password } = JSON.parse(stored);
                     this.api.setAuth(username, password);
+                    this.credentials = { username, password }; // Store for WS upload
                     // Test auth
                     await this.api.getDiskInfo();
                     return;
@@ -582,6 +791,7 @@
                     try {
                         await this.api.getDiskInfo();
                         localStorage.setItem('filest_auth', JSON.stringify({ username, password }));
+                        this.credentials = { username, password }; // Store for WS upload
                         document.getElementById('modalCancel').style.display = '';
                         modal.classList.add('hidden');
                         resolve();
@@ -675,6 +885,7 @@
             };
             document.getElementById('cancelUpload').onclick = () => {
                 this.api.abortUpload();
+                this.wsUploader.cancel();
                 document.getElementById('uploadStatus').textContent = '上传已取消';
                 document.getElementById('uploadBar').style.width = '0%';
                 this.showToast('上传已取消');
@@ -1486,41 +1697,55 @@
             const files = Array.from(fileList);
             const totalSize = files.reduce((sum, f) => sum + f.size, 0);
             
+            // Check if any file needs WebSocket upload (> 90MB)
+            const largeFiles = files.filter(f => f.size > this.largeFileThreshold);
+            const smallFiles = files.filter(f => f.size <= this.largeFileThreshold);
+            const useWebSocket = largeFiles.length > 0;
+            
             document.getElementById('uploadFileName').textContent = files.length === 1
                 ? files[0].name : `${files.length} 个文件`;
             document.getElementById('uploadStatus').textContent = '准备上传...';
             
-            // Show file size warning for large files
-            if (totalSize > 100 * 1024 * 1024) { // > 100MB
+            // Show upload mode info
+            if (useWebSocket) {
                 document.getElementById('uploadStatus').textContent = 
-                    `大文件上传中，请耐心等待... (${this.formatSize(totalSize)})`;
+                    `大文件将使用 WebSocket 上传 (${this.formatSize(totalSize)})`;
             }
 
             try {
-                await this.api.uploadFiles(
-                    this.currentPath, 
-                    files, 
-                    // Progress callback with speed
-                    (loaded, total, speed) => {
-                        const percent = Math.round(loaded / total * 100);
-                        document.getElementById('uploadPercent').textContent = percent + '%';
-                        document.getElementById('uploadBar').style.width = percent + '%';
-                        
-                        // Calculate remaining time
-                        const remaining = speed > 0 ? (total - loaded) / speed : 0;
-                        const remainingStr = remaining > 60 
-                            ? `${Math.round(remaining / 60)} 分钟` 
-                            : `${Math.round(remaining)} 秒`;
-                        
-                        const speedStr = this.formatSize(speed) + '/s';
-                        document.getElementById('uploadStatus').textContent =
-                            `${this.formatSize(loaded)} / ${this.formatSize(total)} · ${speedStr} · 剩余 ${remainingStr}`;
-                    },
-                    // Status change callback (for retry messages)
-                    (status) => {
-                        document.getElementById('uploadStatus').textContent = status;
-                    }
-                );
+                // Upload small files via HTTP (if any)
+                if (smallFiles.length > 0) {
+                    await this.api.uploadFiles(
+                        this.currentPath, 
+                        smallFiles, 
+                        this.createProgressCallback(smallFiles),
+                        (status) => {
+                            document.getElementById('uploadStatus').textContent = status;
+                        }
+                    );
+                }
+                
+                // Upload large files via WebSocket (one by one)
+                for (let i = 0; i < largeFiles.length; i++) {
+                    const file = largeFiles[i];
+                    document.getElementById('uploadFileName').textContent = 
+                        `${file.name} (${i + 1}/${largeFiles.length})`;
+                    document.getElementById('uploadStatus').textContent = 
+                        `[WebSocket] 正在上传大文件...`;
+                    document.getElementById('uploadBar').style.width = '0%';
+                    document.getElementById('uploadPercent').textContent = '0%';
+                    
+                    await this.wsUploader.upload(
+                        file,
+                        this.currentPath,
+                        this.credentials.username,
+                        this.credentials.password,
+                        this.createProgressCallback([file]),
+                        (status) => {
+                            document.getElementById('uploadStatus').textContent = `[WebSocket] ${status}`;
+                        }
+                    );
+                }
 
                 document.getElementById('uploadStatus').textContent = '上传完成!';
                 document.getElementById('uploadBar').classList.add('bg-green-500');

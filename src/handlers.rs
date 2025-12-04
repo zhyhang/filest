@@ -275,7 +275,7 @@ pub async fn create_folder(
         Err(e) => Json(ApiResponse::<()>::error(format!("创建失败: {}", e))).into_response(),
     }
 }
-/// 上传文件
+/// Upload files with streaming write to avoid loading entire file into memory
 pub async fn upload_files(
     State(state): State<AppState>,
     mut multipart: Multipart,
@@ -284,7 +284,7 @@ pub async fn upload_files(
     let mut upload_path_logical = state.root_dir.clone();
     let mut uploaded_files = Vec::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Ok(Some(mut field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("").to_string();
 
         if name == "path" {
@@ -305,7 +305,7 @@ pub async fn upload_files(
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "unknown".to_string());
 
-            // 确保上传目录存在
+            // Ensure upload directory exists
             if let Err(e) = fs::create_dir_all(&upload_path_actual).await {
                 return Json(ApiResponse::<()>::error(format!("创建目录失败: {}", e))).into_response();
             }
@@ -313,31 +313,47 @@ pub async fn upload_files(
             let file_path_actual = upload_path_actual.join(&filename);
             let file_path_logical = upload_path_logical.join(&filename);
 
-            // 读取文件内容
-            match field.bytes().await {
-                Ok(data) => {
-                    // 写入文件
-                    match fs::File::create(&file_path_actual).await {
-                        Ok(mut file) => {
-                            if let Err(e) = file.write_all(&data).await {
-                                return Json(ApiResponse::<()>::error(format!("写入文件失败: {}", e))).into_response();
-                            }
+            // Create file for streaming write
+            let mut file = match fs::File::create(&file_path_actual).await {
+                Ok(f) => f,
+                Err(e) => {
+                    return Json(ApiResponse::<()>::error(format!("创建文件失败: {}", e))).into_response();
+                }
+            };
 
-                            uploaded_files.push(UploadedFile {
-                                name: filename,
-                                size: data.len() as u64,
-                                path: relative_path(&state.root_dir, &file_path_logical),
-                            });
-                        }
-                        Err(e) => {
-                            return Json(ApiResponse::<()>::error(format!("创建文件失败: {}", e))).into_response();
+            // Stream write: read chunks and write immediately to avoid memory bloat
+            let mut total_size: u64 = 0;
+            loop {
+                match field.chunk().await {
+                    Ok(Some(chunk)) => {
+                        total_size += chunk.len() as u64;
+                        if let Err(e) = file.write_all(&chunk).await {
+                            // Clean up partial file on error
+                            let _ = fs::remove_file(&file_path_actual).await;
+                            return Json(ApiResponse::<()>::error(format!("写入文件失败: {}", e))).into_response();
                         }
                     }
-                }
-                Err(e) => {
-                    return Json(ApiResponse::<()>::error(format!("读取上传数据失败: {}", e))).into_response();
+                    Ok(None) => {
+                        // End of stream, flush and close file
+                        if let Err(e) = file.flush().await {
+                            let _ = fs::remove_file(&file_path_actual).await;
+                            return Json(ApiResponse::<()>::error(format!("刷新文件失败: {}", e))).into_response();
+                        }
+                        break;
+                    }
+                    Err(e) => {
+                        // Clean up partial file on error
+                        let _ = fs::remove_file(&file_path_actual).await;
+                        return Json(ApiResponse::<()>::error(format!("读取上传数据失败: {}", e))).into_response();
+                    }
                 }
             }
+
+            uploaded_files.push(UploadedFile {
+                name: filename,
+                size: total_size,
+                path: relative_path(&state.root_dir, &file_path_logical),
+            });
         }
     }
 

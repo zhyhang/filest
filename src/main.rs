@@ -17,6 +17,7 @@
 mod auth;
 mod handlers;
 mod models;
+mod ws_upload;
 use axum::{
     body::Body,
     extract::DefaultBodyLimit,
@@ -119,10 +120,16 @@ async fn main() {
             state.clone(),
             auth::auth_middleware,
         ));
+
+    // WebSocket routes (handle auth internally, no middleware)
+    let ws_routes = Router::new()
+        .route("/upload", get(ws_upload::ws_upload_handler));
+
     // Main routes - static resources don't require authentication
     let app = Router::new()
         .route("/", get(serve_index))
         .nest("/api", api_routes)
+        .nest("/api/ws", ws_routes)
         .layer(cors)
         .with_state(state);
     // 启动服务器

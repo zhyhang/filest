@@ -6,8 +6,9 @@ authors = ["File Manager"]
 description = "A remote file manager server with web UI"
 [dependencies]
 # Web framework
-axum = { version = "0.7", features = ["multipart"] }
+axum = { version = "0.7", features = ["multipart", "ws"] }
 tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs", "cors"] }
 # Serialization
