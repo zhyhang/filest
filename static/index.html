@@ -1413,16 +1413,70 @@
         }
         showContextMenu(x, y) {
             const menu = document.getElementById('contextMenu');
-            menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
-            menu.style.top = Math.min(y, window.innerHeight - 300) + 'px';
+            // First show menu off-screen to get actual dimensions
+            menu.style.visibility = 'hidden';
             menu.classList.remove('hidden');
+            const menuWidth = menu.offsetWidth;
+            const menuHeight = menu.offsetHeight;
+
+            // Calculate position ensuring menu stays within viewport
+            const padding = 8; // Padding from screen edges
+            let left = x;
+            let top = y;
+
+            // Adjust horizontal position if menu would overflow right edge
+            if (left + menuWidth > window.innerWidth - padding) {
+                left = Math.max(padding, window.innerWidth - menuWidth - padding);
+            }
+
+            // Adjust vertical position if menu would overflow bottom edge
+            if (top + menuHeight > window.innerHeight - padding) {
+                // Try to show above the click point
+                if (y - menuHeight > padding) {
+                    top = y - menuHeight;
+                } else {
+                    // If not enough space above, show at the maximum visible position
+                    top = Math.max(padding, window.innerHeight - menuHeight - padding);
+                }
+            }
+
+            menu.style.left = left + 'px';
+            menu.style.top = top + 'px';
+            menu.style.visibility = 'visible';
             menu.querySelector('[data-action="paste"]').classList.toggle('opacity-50', this.clipboard.items.length === 0);
         }
         showFolderContextMenu(x, y) {
             const menu = document.getElementById('folderContextMenu');
-            menu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
-            menu.style.top = Math.min(y, window.innerHeight - 200) + 'px';
+            // First show menu off-screen to get actual dimensions
+            menu.style.visibility = 'hidden';
             menu.classList.remove('hidden');
+            const menuWidth = menu.offsetWidth;
+            const menuHeight = menu.offsetHeight;
+
+            // Calculate position ensuring menu stays within viewport
+            const padding = 8; // Padding from screen edges
+            let left = x;
+            let top = y;
+
+            // Adjust horizontal position if menu would overflow right edge
+            if (left + menuWidth > window.innerWidth - padding) {
+                left = Math.max(padding, window.innerWidth - menuWidth - padding);
+            }
+
+            // Adjust vertical position if menu would overflow bottom edge
+            if (top + menuHeight > window.innerHeight - padding) {
+                // Try to show above the click point
+                if (y - menuHeight > padding) {
+                    top = y - menuHeight;
+                } else {
+                    // If not enough space above, show at the maximum visible position
+                    top = Math.max(padding, window.innerHeight - menuHeight - padding);
+                }
+            }
+
+            menu.style.left = left + 'px';
+            menu.style.top = top + 'px';
+            menu.style.visibility = 'visible';
             menu.querySelector('[data-action="paste"]').classList.toggle('opacity-50', this.clipboard.items.length === 0);
         }
         hideContextMenus() {
