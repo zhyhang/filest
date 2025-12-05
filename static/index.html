@@ -316,9 +316,11 @@
         constructor(baseUrl = '') {
             this.baseUrl = baseUrl;
             this.authHeader = null;
+            this.authCredentials = null; // Store credentials for URL-based auth
         }
         setAuth(username, password) {
             this.authHeader = 'Basic ' + btoa(username + ':' + password);
+            this.authCredentials = { username, password };
         }
         async request(method, endpoint, data = null, isFormData = false) {
             const options = {
@@ -357,42 +359,78 @@
         async createFolder(path, name) {
             return this.request('POST', '/api/folder', { path, name });
         }
+        // Chunk size for chunked upload (5MB - safe for most proxies)
+        static CHUNK_SIZE = 5 * 1024 * 1024;
+        // Threshold for using chunked upload (10MB)
+        static CHUNKED_THRESHOLD = 10 * 1024 * 1024;
+
         async uploadFiles(path, files, onProgress, onStatusChange) {
+            const results = [];
+            let totalSize = 0;
+            let totalUploaded = 0;
+
+            for (const file of files) {
+                totalSize += file.size;
+            }
+
+            for (const file of files) {
+                const fileStartOffset = totalUploaded;
+
+                // Use chunked upload for large files
+                if (file.size > ApiClient.CHUNKED_THRESHOLD) {
+                    if (onStatusChange) onStatusChange(`分片上传: ${file.name}`);
+                    const result = await this.chunkedUpload(path, file, (loaded, fileTotal, speed) => {
+                        if (onProgress) {
+                            onProgress(fileStartOffset + loaded, totalSize, speed);
+                        }
+                    }, onStatusChange);
+                    results.push(result);
+                } else {
+                    // Use simple upload for small files
+                    const result = await this.simpleUpload(path, file, (loaded, fileTotal, speed) => {
+                        if (onProgress) {
+                            onProgress(fileStartOffset + loaded, totalSize, speed);
+                        }
+                    }, onStatusChange);
+                    results.push(result);
+                }
+
+                totalUploaded += file.size;
+            }
+
+            return { success: true, files: results };
+        }
+
+        // Simple upload for small files
+        async simpleUpload(path, file, onProgress, onStatusChange) {
             const formData = new FormData();
             formData.append('path', path);
-            for (const file of files) {
-                formData.append('files', file);
-            }
-            
-            // Enhanced upload with retry and timeout handling
+            formData.append('files', file);
+
             const maxRetries = 3;
-            const timeout = 5 * 60 * 1000; // 5 minutes timeout for large files
-            
+            const timeout = 5 * 60 * 1000;
+
             const attemptUpload = (retryCount = 0) => {
                 return new Promise((resolve, reject) => {
                     const xhr = new XMLHttpRequest();
                     xhr.timeout = timeout;
                     xhr.open('POST', `${this.baseUrl}/api/upload`);
-                    
-                    // Add auth header if set
+
                     if (this.authHeader) {
                         xhr.setRequestHeader('Authorization', this.authHeader);
                     }
 
                     let lastLoaded = 0;
                     let lastTime = Date.now();
-                    
+
                     xhr.upload.onprogress = (e) => {
                         if (e.lengthComputable && onProgress) {
-                            // Calculate upload speed
                             const now = Date.now();
                             const timeDiff = (now - lastTime) / 1000;
                             const loadedDiff = e.loaded - lastLoaded;
                             const speed = timeDiff > 0 ? loadedDiff / timeDiff : 0;
-                            
                             lastLoaded = e.loaded;
                             lastTime = now;
-                            
                             onProgress(e.loaded, e.total, speed);
                         }
                     };
@@ -405,7 +443,7 @@
                         try {
                             const result = JSON.parse(xhr.responseText);
                             if (result.success) {
-                                resolve(result);
+                                resolve(result.files ? result.files[0] : result);
                             } else {
                                 reject(new Error(result.error));
                             }
@@ -419,12 +457,12 @@
                             if (onStatusChange) onStatusChange(`网络错误，正在重试 (${retryCount + 1}/${maxRetries})...`);
                             setTimeout(() => {
                                 attemptUpload(retryCount + 1).then(resolve).catch(reject);
-                            }, 1000 * (retryCount + 1)); // Exponential backoff
+                            }, 1000 * (retryCount + 1));
                         } else {
                             reject(new Error('上传失败，已重试 ' + maxRetries + ' 次'));
                         }
                     };
-                    
+
                     xhr.ontimeout = () => {
                         if (retryCount < maxRetries) {
                             if (onStatusChange) onStatusChange(`上传超时，正在重试 (${retryCount + 1}/${maxRetries})...`);
@@ -435,55 +473,185 @@
                             reject(new Error('上传超时，请检查网络连接'));
                         }
                     };
-                    
-                    // Store xhr for potential abort
+
                     this.currentUploadXhr = xhr;
                     xhr.send(formData);
                 });
             };
-            
+
             return attemptUpload();
         }
-        
-        // Abort current upload
+
+        // Chunked upload for large files
+        async chunkedUpload(path, file, onProgress, onStatusChange) {
+            const chunkSize = ApiClient.CHUNK_SIZE;
+            const totalChunks = Math.ceil(file.size / chunkSize);
+            const maxRetries = 3;
+
+            // Track upload state for abort
+            this.chunkedUploadAborted = false;
+
+            // Step 1: Initialize upload session
+            if (onStatusChange) onStatusChange(`初始化上传: ${file.name}`);
+            const initResult = await this.request('POST', '/api/upload/init', {
+                path: path,
+                filename: file.name,
+                totalSize: file.size,
+                chunkSize: chunkSize,
+                totalChunks: totalChunks
+            });
+
+            if (!initResult.success) {
+                throw new Error(initResult.error || '初始化上传失败');
+            }
+
+            const uploadId = initResult.uploadId;
+            let uploadedBytes = 0;
+            let lastTime = Date.now();
+            let lastLoaded = 0;
+
+            // Step 2: Upload chunks
+            for (let i = 0; i < totalChunks; i++) {
+                if (this.chunkedUploadAborted) {
+                    // Abort the upload session
+                    await this.request('POST', '/api/upload/abort', { uploadId });
+                    throw new Error('上传已取消');
+                }
+
+                const start = i * chunkSize;
+                const end = Math.min(start + chunkSize, file.size);
+                const chunk = file.slice(start, end);
+
+                // Upload chunk with retries
+                let success = false;
+                let lastError = null;
+
+                for (let retry = 0; retry <= maxRetries && !success; retry++) {
+                    if (retry > 0) {
+                        if (onStatusChange) onStatusChange(`分片 ${i + 1}/${totalChunks} 重试 ${retry}/${maxRetries}...`);
+                        await new Promise(r => setTimeout(r, 1000 * retry));
+                    }
+
+                    try {
+                        await this.uploadChunk(uploadId, i, chunk);
+                        success = true;
+                    } catch (e) {
+                        lastError = e;
+                    }
+                }
+
+                if (!success) {
+                    await this.request('POST', '/api/upload/abort', { uploadId });
+                    throw new Error(`分片 ${i + 1} 上传失败: ${lastError?.message || '未知错误'}`);
+                }
+
+                uploadedBytes += (end - start);
+
+                // Calculate speed and report progress
+                const now = Date.now();
+                const timeDiff = (now - lastTime) / 1000;
+                const loadedDiff = uploadedBytes - lastLoaded;
+                const speed = timeDiff > 0.1 ? loadedDiff / timeDiff : 0;
+
+                if (timeDiff > 0.5) {
+                    lastTime = now;
+                    lastLoaded = uploadedBytes;
+                }
+
+                if (onProgress) {
+                    onProgress(uploadedBytes, file.size, speed);
+                }
+                // Don't call onStatusChange here to avoid overwriting progress info
+            }
+
+            // Step 3: Complete upload - show merge status
+            if (onStatusChange) onStatusChange(`正在合并文件...`);
+            const completeResult = await this.request('POST', '/api/upload/complete', { uploadId });
+
+            if (!completeResult.success) {
+                throw new Error(completeResult.error || '完成上传失败');
+            }
+
+            return {
+                name: completeResult.name,
+                size: completeResult.size,
+                path: completeResult.path
+            };
+        }
+
+        // Upload a single chunk
+        async uploadChunk(uploadId, chunkIndex, chunkBlob) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.timeout = 60000; // 1 minute timeout per chunk
+
+                const url = `${this.baseUrl}/api/upload/chunk?uploadId=${encodeURIComponent(uploadId)}&chunkIndex=${chunkIndex}`;
+                xhr.open('POST', url);
+
+                if (this.authHeader) {
+                    xhr.setRequestHeader('Authorization', this.authHeader);
+                }
+
+                xhr.onload = () => {
+                    if (xhr.status === 401) {
+                        reject(new Error('认证失败'));
+                        return;
+                    }
+                    try {
+                        const result = JSON.parse(xhr.responseText);
+                        if (result.success && result.received) {
+                            resolve(result);
+                        } else {
+                            reject(new Error(result.error || '分片上传失败'));
+                        }
+                    } catch (e) {
+                        reject(new Error('解析响应失败'));
+                    }
+                };
+
+                xhr.onerror = () => reject(new Error('网络错误'));
+                xhr.ontimeout = () => reject(new Error('上传超时'));
+
+                // Send chunk as form data
+                const formData = new FormData();
+                formData.append('chunk', chunkBlob);
+                xhr.send(formData);
+            });
+        }
+
+        // Abort current upload (both simple and chunked)
         abortUpload() {
+            // Abort simple upload
             if (this.currentUploadXhr) {
                 this.currentUploadXhr.abort();
                 this.currentUploadXhr = null;
             }
+            // Signal chunked upload to abort
+            this.chunkedUploadAborted = true;
         }
         async downloadFile(path) {
-            try {
-                const options = {
-                    method: 'GET',
-                    headers: {}
-                };
-                if (this.authHeader) {
-                    options.headers['Authorization'] = this.authHeader;
-                }
-                
-                const response = await fetch(`${this.baseUrl}/api/download?path=${encodeURIComponent(path)}`, options);
-                
-                if (response.status === 401) {
-                    throw new Error('认证失败，请刷新页面重新登录');
-                }
-                if (!response.ok) {
-                    throw new Error('下载失败');
-                }
-                
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = path.split('/').pop(); // Extract filename
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-            } catch (e) {
-                console.error('Download error:', e);
-                throw e;
+            // Use direct link download for streaming - browser handles progress natively
+            const filename = path.split('/').pop();
+            let downloadUrl;
+
+            // If auth is required, embed credentials in URL for browser download
+            if (this.authCredentials) {
+                // Build URL with embedded credentials: https://user:pass@host/path
+                const urlObj = new URL(`${window.location.origin}${this.baseUrl}/api/download?path=${encodeURIComponent(path)}`);
+                urlObj.username = this.authCredentials.username;
+                urlObj.password = this.authCredentials.password;
+                downloadUrl = urlObj.toString();
+            } else {
+                downloadUrl = `${this.baseUrl}/api/download?path=${encodeURIComponent(path)}`;
             }
+
+            // Trigger download via link - browser handles streaming and progress
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
         }
         async rename(path, newName) {
             return this.request('PUT', '/api/rename', { path, newName });

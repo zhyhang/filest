@@ -30,12 +30,15 @@ use std::{net::SocketAddr, path::PathBuf};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use models::{new_upload_sessions, UploadSessions};
+
 /// 应用状态
 #[derive(Clone)]
 pub struct AppState {
     pub root_dir: PathBuf,
     pub username: String,
     pub password: String,
+    pub upload_sessions: UploadSessions,
 }
 /// 命令行参数
 #[derive(Parser, Debug)]
@@ -93,6 +96,7 @@ async fn main() {
         root_dir,
         username: args.user.clone(),
         password: args.password.clone(),
+        upload_sessions: new_upload_sessions(),
     };
     // CORS 配置
     let cors = CorsLayer::new()
@@ -100,7 +104,9 @@ async fn main() {
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers(Any);
     // API routes (require authentication)
-    // Set upload limit to 500MB for large file uploads
+    // Set upload limit to 10GB for large file uploads
+    // With streaming upload, memory usage stays constant regardless of file size
+    // Chunked upload uses smaller chunks (5MB default) to bypass proxy limits
     let api_routes = Router::new()
         .route("/files", get(handlers::get_files))
         .route("/folder", post(handlers::create_folder))
@@ -114,7 +120,12 @@ async fn main() {
         .route("/folders", get(handlers::get_folders))
         .route("/disk", get(handlers::get_disk_info))
         .route("/search", get(handlers::search_files))
-        .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB limit
+        // Chunked upload routes
+        .route("/upload/init", post(handlers::chunked_upload_init))
+        .route("/upload/chunk", post(handlers::chunked_upload_chunk))
+        .route("/upload/complete", post(handlers::chunked_upload_complete))
+        .route("/upload/abort", post(handlers::chunked_upload_abort))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024 * 1024)) // 10GB limit
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
