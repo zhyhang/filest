@@ -9,6 +9,8 @@ use chrono::{DateTime, Local};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
+use uuid::Uuid;
 use crate::models::*;
 use crate::AppState;
 // ========== 辅助函数 ==========
@@ -275,7 +277,8 @@ pub async fn create_folder(
         Err(e) => Json(ApiResponse::<()>::error(format!("创建失败: {}", e))).into_response(),
     }
 }
-/// 上传文件
+/// 上传文件 (streaming)
+/// Uses chunk() to stream file content, avoiding loading entire file into memory
 pub async fn upload_files(
     State(state): State<AppState>,
     mut multipart: Multipart,
@@ -284,7 +287,7 @@ pub async fn upload_files(
     let mut upload_path_logical = state.root_dir.clone();
     let mut uploaded_files = Vec::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Ok(Some(mut field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("").to_string();
 
         if name == "path" {
@@ -305,7 +308,7 @@ pub async fn upload_files(
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "unknown".to_string());
 
-            // 确保上传目录存在
+            // Ensure upload directory exists
             if let Err(e) = fs::create_dir_all(&upload_path_actual).await {
                 return Json(ApiResponse::<()>::error(format!("创建目录失败: {}", e))).into_response();
             }
@@ -313,31 +316,50 @@ pub async fn upload_files(
             let file_path_actual = upload_path_actual.join(&filename);
             let file_path_logical = upload_path_logical.join(&filename);
 
-            // 读取文件内容
-            match field.bytes().await {
-                Ok(data) => {
-                    // 写入文件
-                    match fs::File::create(&file_path_actual).await {
-                        Ok(mut file) => {
-                            if let Err(e) = file.write_all(&data).await {
-                                return Json(ApiResponse::<()>::error(format!("写入文件失败: {}", e))).into_response();
-                            }
+            // Create file for streaming write
+            let mut file = match fs::File::create(&file_path_actual).await {
+                Ok(f) => f,
+                Err(e) => {
+                    return Json(ApiResponse::<()>::error(format!("创建文件失败: {}", e))).into_response();
+                }
+            };
 
-                            uploaded_files.push(UploadedFile {
-                                name: filename,
-                                size: data.len() as u64,
-                                path: relative_path(&state.root_dir, &file_path_logical),
-                            });
-                        }
-                        Err(e) => {
-                            return Json(ApiResponse::<()>::error(format!("创建文件失败: {}", e))).into_response();
+            // Stream chunks to file - read and write in small chunks
+            // This keeps memory usage constant regardless of file size
+            let mut total_size: u64 = 0;
+            loop {
+                match field.chunk().await {
+                    Ok(Some(chunk)) => {
+                        total_size += chunk.len() as u64;
+                        if let Err(e) = file.write_all(&chunk).await {
+                            // Clean up partial file on error
+                            let _ = fs::remove_file(&file_path_actual).await;
+                            return Json(ApiResponse::<()>::error(format!("写入文件失败: {}", e))).into_response();
                         }
                     }
-                }
-                Err(e) => {
-                    return Json(ApiResponse::<()>::error(format!("读取上传数据失败: {}", e))).into_response();
+                    Ok(None) => {
+                        // End of field data
+                        break;
+                    }
+                    Err(e) => {
+                        // Clean up partial file on error
+                        let _ = fs::remove_file(&file_path_actual).await;
+                        return Json(ApiResponse::<()>::error(format!("读取上传数据失败: {}", e))).into_response();
+                    }
                 }
             }
+
+            // Ensure all data is flushed to disk
+            if let Err(e) = file.sync_all().await {
+                let _ = fs::remove_file(&file_path_actual).await;
+                return Json(ApiResponse::<()>::error(format!("同步文件失败: {}", e))).into_response();
+            }
+
+            uploaded_files.push(UploadedFile {
+                name: filename,
+                size: total_size,
+                path: relative_path(&state.root_dir, &file_path_logical),
+            });
         }
     }
 
@@ -345,7 +367,8 @@ pub async fn upload_files(
         files: uploaded_files,
     })).into_response()
 }
-/// 下载文件
+/// 下载文件 (streaming)
+/// Uses ReaderStream to stream file content, avoiding loading entire file into memory
 pub async fn download_file(
     State(state): State<AppState>,
     Query(query): Query<PathQuery>,
@@ -381,28 +404,46 @@ pub async fn download_file(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "download".to_string());
 
-    // 读取文件
-    match fs::read(&paths.actual).await {
-        Ok(data) => {
-            let mime = mime_guess::from_path(&paths.actual)
-                .first_or_octet_stream()
-                .to_string();
-
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, mime)
-                .header(
-                    header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{}\"", filename),
-                )
-                .body(Body::from(data))
-                .unwrap()
+    // Get file metadata for Content-Length header
+    let metadata = match fs::metadata(&paths.actual).await {
+        Ok(m) => m,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("获取文件信息失败: {}", e)))
+                .unwrap();
         }
-        Err(e) => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::from(format!("读取文件失败: {}", e)))
-            .unwrap(),
-    }
+    };
+
+    // Open file for streaming
+    let file = match fs::File::open(&paths.actual).await {
+        Ok(f) => f,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("打开文件失败: {}", e)))
+                .unwrap();
+        }
+    };
+
+    // Create a stream from the file - this reads in chunks, not all at once
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    let mime = mime_guess::from_path(&paths.actual)
+        .first_or_octet_stream()
+        .to_string();
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::CONTENT_LENGTH, metadata.len())
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", filename),
+        )
+        .body(body)
+        .unwrap()
 }
 /// 重命名
 pub async fn rename(
@@ -722,4 +763,214 @@ pub async fn search_files(
     search_in_dir(&state.root_dir, &paths.actual, &query_lower, &mut results, 100).await;
 
     Json(ApiResponse::success(SearchResponse { results })).into_response()
+}
+
+// ========== Chunked Upload API ==========
+
+/// Initialize chunked upload session
+pub async fn chunked_upload_init(
+    State(state): State<AppState>,
+    Json(req): Json<ChunkedUploadInitRequest>,
+) -> impl IntoResponse {
+    // Validate upload path
+    let paths = match safe_path(&state.root_dir, &req.path) {
+        Ok(p) => p,
+        Err(e) => return Json(ApiResponse::<()>::error(e)).into_response(),
+    };
+
+    // Generate unique upload ID
+    let upload_id = Uuid::new_v4().to_string();
+
+    // Create temp directory for chunks
+    let temp_dir = std::env::temp_dir().join("filest_uploads").join(&upload_id);
+    if let Err(e) = fs::create_dir_all(&temp_dir).await {
+        return Json(ApiResponse::<()>::error(format!("Failed to create temp directory: {}", e))).into_response();
+    }
+
+    // Create upload session
+    let session = UploadSession {
+        upload_id: upload_id.clone(),
+        filename: req.filename.clone(),
+        total_size: req.total_size,
+        total_chunks: req.total_chunks,
+        chunk_size: req.chunk_size,
+        upload_path: paths.actual,
+        temp_dir: temp_dir.clone(),
+        received_chunks: vec![false; req.total_chunks as usize],
+        created_at: std::time::Instant::now(),
+    };
+
+    // Store session
+    {
+        let mut sessions = state.upload_sessions.write().await;
+        sessions.insert(upload_id.clone(), session);
+    }
+
+    Json(ApiResponse::success(ChunkedUploadInitResponse {
+        upload_id,
+        chunk_size: req.chunk_size,
+    })).into_response()
+}
+
+/// Upload a single chunk
+pub async fn chunked_upload_chunk(
+    State(state): State<AppState>,
+    Query(query): Query<ChunkUploadQuery>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let upload_id = query.upload_id;
+    let chunk_index = query.chunk_index;
+
+    // Get session
+    let session = {
+        let sessions = state.upload_sessions.read().await;
+        match sessions.get(&upload_id) {
+            Some(s) => s.clone(),
+            None => return Json(ApiResponse::<()>::error("Upload session not found")).into_response(),
+        }
+    };
+
+    // Validate chunk index
+    if chunk_index >= session.total_chunks {
+        return Json(ApiResponse::<()>::error("Invalid chunk index")).into_response();
+    }
+
+    // Get chunk data from multipart
+    let chunk_data = match multipart.next_field().await {
+        Ok(Some(field)) => {
+            match field.bytes().await {
+                Ok(data) => data,
+                Err(e) => return Json(ApiResponse::<()>::error(format!("Failed to read chunk data: {}", e))).into_response(),
+            }
+        }
+        Ok(None) => return Json(ApiResponse::<()>::error("No chunk data provided")).into_response(),
+        Err(e) => return Json(ApiResponse::<()>::error(format!("Failed to get multipart field: {}", e))).into_response(),
+    };
+
+    // Write chunk to temp file
+    let chunk_path = session.temp_dir.join(format!("chunk_{:06}", chunk_index));
+    if let Err(e) = fs::write(&chunk_path, &chunk_data).await {
+        return Json(ApiResponse::<()>::error(format!("Failed to write chunk: {}", e))).into_response();
+    }
+
+    // Update session
+    {
+        let mut sessions = state.upload_sessions.write().await;
+        if let Some(s) = sessions.get_mut(&upload_id) {
+            s.received_chunks[chunk_index as usize] = true;
+        }
+    }
+
+    Json(ApiResponse::success(ChunkUploadResponse {
+        chunk_index,
+        received: true,
+    })).into_response()
+}
+
+/// Complete chunked upload - merge all chunks
+pub async fn chunked_upload_complete(
+    State(state): State<AppState>,
+    Json(req): Json<ChunkedUploadCompleteRequest>,
+) -> impl IntoResponse {
+    let upload_id = req.upload_id;
+
+    // Get and remove session
+    let session = {
+        let mut sessions = state.upload_sessions.write().await;
+        match sessions.remove(&upload_id) {
+            Some(s) => s,
+            None => return Json(ApiResponse::<()>::error("Upload session not found")).into_response(),
+        }
+    };
+
+    // Check all chunks received
+    let missing: Vec<u32> = session.received_chunks.iter()
+        .enumerate()
+        .filter(|&(_, received)| !received)
+        .map(|(i, _)| i as u32)
+        .collect();
+
+    if !missing.is_empty() {
+        // Re-add session for retry
+        {
+            let mut sessions = state.upload_sessions.write().await;
+            sessions.insert(upload_id, session);
+        }
+        return Json(ApiResponse::<()>::error(format!("Missing chunks: {:?}", missing))).into_response();
+    }
+
+    // Ensure upload directory exists
+    if let Err(e) = fs::create_dir_all(&session.upload_path).await {
+        return Json(ApiResponse::<()>::error(format!("Failed to create upload directory: {}", e))).into_response();
+    }
+
+    // Create final file
+    let final_path = session.upload_path.join(&session.filename);
+    let mut final_file = match fs::File::create(&final_path).await {
+        Ok(f) => f,
+        Err(e) => return Json(ApiResponse::<()>::error(format!("Failed to create final file: {}", e))).into_response(),
+    };
+
+    // Merge chunks in order
+    let mut total_written: u64 = 0;
+    for i in 0..session.total_chunks {
+        let chunk_path = session.temp_dir.join(format!("chunk_{:06}", i));
+        let chunk_data = match fs::read(&chunk_path).await {
+            Ok(data) => data,
+            Err(e) => {
+                // Cleanup partial file
+                let _ = fs::remove_file(&final_path).await;
+                return Json(ApiResponse::<()>::error(format!("Failed to read chunk {}: {}", i, e))).into_response();
+            }
+        };
+
+        if let Err(e) = final_file.write_all(&chunk_data).await {
+            let _ = fs::remove_file(&final_path).await;
+            return Json(ApiResponse::<()>::error(format!("Failed to write chunk {} to final file: {}", i, e))).into_response();
+        }
+
+        total_written += chunk_data.len() as u64;
+    }
+
+    // Sync to disk
+    if let Err(e) = final_file.sync_all().await {
+        let _ = fs::remove_file(&final_path).await;
+        return Json(ApiResponse::<()>::error(format!("Failed to sync file: {}", e))).into_response();
+    }
+
+    // Cleanup temp directory
+    let _ = fs::remove_dir_all(&session.temp_dir).await;
+
+    // Build response path
+    let response_path = relative_path(&state.root_dir, &final_path);
+
+    Json(ApiResponse::success(ChunkedUploadCompleteResponse {
+        name: session.filename,
+        size: total_written,
+        path: response_path,
+    })).into_response()
+}
+
+/// Abort chunked upload - cleanup temp files
+pub async fn chunked_upload_abort(
+    State(state): State<AppState>,
+    Json(req): Json<ChunkedUploadAbortRequest>,
+) -> impl IntoResponse {
+    let upload_id = req.upload_id;
+
+    // Get and remove session
+    let session = {
+        let mut sessions = state.upload_sessions.write().await;
+        sessions.remove(&upload_id)
+    };
+
+    if let Some(session) = session {
+        // Cleanup temp directory
+        let _ = fs::remove_dir_all(&session.temp_dir).await;
+    }
+
+    Json(ApiResponse::success(OperationResponse {
+        message: "Upload aborted".to_string(),
+        new_path: None,
+    })).into_response()
 }

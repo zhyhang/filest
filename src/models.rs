@@ -1,4 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
 /// API 响应包装
 #[derive(Serialize)]
 pub struct ApiResponse<T: Serialize> {
@@ -139,4 +143,89 @@ pub struct PathQuery {
 pub struct SearchQuery {
     pub query: String,
     pub path: Option<String>,
+}
+
+// ========== Chunked Upload ==========
+
+/// Chunked upload session info
+#[derive(Clone)]
+pub struct UploadSession {
+    pub upload_id: String,
+    pub filename: String,
+    pub total_size: u64,
+    pub total_chunks: u32,
+    pub chunk_size: u64,
+    pub upload_path: std::path::PathBuf,
+    pub temp_dir: std::path::PathBuf,
+    pub received_chunks: Vec<bool>,
+    pub created_at: std::time::Instant,
+}
+
+/// Global upload sessions manager
+pub type UploadSessions = Arc<RwLock<HashMap<String, UploadSession>>>;
+
+/// Create a new upload sessions manager
+pub fn new_upload_sessions() -> UploadSessions {
+    Arc::new(RwLock::new(HashMap::new()))
+}
+
+/// Request to initialize chunked upload
+#[derive(Deserialize)]
+pub struct ChunkedUploadInitRequest {
+    pub path: String,
+    pub filename: String,
+    #[serde(rename = "totalSize")]
+    pub total_size: u64,
+    #[serde(rename = "chunkSize")]
+    pub chunk_size: u64,
+    #[serde(rename = "totalChunks")]
+    pub total_chunks: u32,
+}
+
+/// Response for chunked upload init
+#[derive(Serialize)]
+pub struct ChunkedUploadInitResponse {
+    #[serde(rename = "uploadId")]
+    pub upload_id: String,
+    #[serde(rename = "chunkSize")]
+    pub chunk_size: u64,
+}
+
+/// Query params for chunk upload
+#[derive(Deserialize)]
+pub struct ChunkUploadQuery {
+    #[serde(rename = "uploadId")]
+    pub upload_id: String,
+    #[serde(rename = "chunkIndex")]
+    pub chunk_index: u32,
+}
+
+/// Response for chunk upload
+#[derive(Serialize)]
+pub struct ChunkUploadResponse {
+    #[serde(rename = "chunkIndex")]
+    pub chunk_index: u32,
+    pub received: bool,
+}
+
+/// Request to complete chunked upload
+#[derive(Deserialize)]
+pub struct ChunkedUploadCompleteRequest {
+    #[serde(rename = "uploadId")]
+    pub upload_id: String,
+}
+
+/// Response for chunked upload complete
+#[derive(Serialize)]
+pub struct ChunkedUploadCompleteResponse {
+    pub name: String,
+    pub size: u64,
+    pub path: String,
+}
+
+/// Request to abort chunked upload
+#[derive(Deserialize)]
+pub struct ChunkedUploadAbortRequest {
+    #[serde(rename = "uploadId")]
+    pub upload_id: String,
 }
