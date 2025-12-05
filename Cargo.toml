@@ -1,12 +1,12 @@
 [package]
 name = "filest"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
-authors = ["File Manager"]
+authors = ["Yanhuang"]
 description = "A remote file manager server with web UI"
 [dependencies]
 # Web framework
-axum = { version = "0.7", features = ["multipart"] }
+axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs", "cors"] }

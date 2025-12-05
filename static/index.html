@@ -482,11 +482,15 @@
             return attemptUpload();
         }
 
-        // Chunked upload for large files
+        // Parallel concurrency for chunk uploads
+        static PARALLEL_CHUNKS = 4;
+
+        // Chunked upload for large files with parallel upload
         async chunkedUpload(path, file, onProgress, onStatusChange) {
             const chunkSize = ApiClient.CHUNK_SIZE;
             const totalChunks = Math.ceil(file.size / chunkSize);
             const maxRetries = 3;
+            const parallelCount = ApiClient.PARALLEL_CHUNKS;
 
             // Track upload state for abort
             this.chunkedUploadAborted = false;
@@ -506,62 +510,79 @@
             }
 
             const uploadId = initResult.uploadId;
+
+            // Track progress for parallel uploads
+            const chunkStatus = new Array(totalChunks).fill(false); // true = uploaded
             let uploadedBytes = 0;
             let lastTime = Date.now();
-            let lastLoaded = 0;
+            let lastReportedBytes = 0;
 
-            // Step 2: Upload chunks
-            for (let i = 0; i < totalChunks; i++) {
+            // Upload single chunk with retries
+            const uploadSingleChunk = async (chunkIndex) => {
                 if (this.chunkedUploadAborted) {
-                    // Abort the upload session
-                    await this.request('POST', '/api/upload/abort', { uploadId });
                     throw new Error('上传已取消');
                 }
 
-                const start = i * chunkSize;
+                const start = chunkIndex * chunkSize;
                 const end = Math.min(start + chunkSize, file.size);
                 const chunk = file.slice(start, end);
+                const chunkBytes = end - start;
 
-                // Upload chunk with retries
-                let success = false;
-                let lastError = null;
-
-                for (let retry = 0; retry <= maxRetries && !success; retry++) {
+                for (let retry = 0; retry <= maxRetries; retry++) {
                     if (retry > 0) {
-                        if (onStatusChange) onStatusChange(`分片 ${i + 1}/${totalChunks} 重试 ${retry}/${maxRetries}...`);
                         await new Promise(r => setTimeout(r, 1000 * retry));
                     }
 
                     try {
-                        await this.uploadChunk(uploadId, i, chunk);
-                        success = true;
+                        await this.uploadChunk(uploadId, chunkIndex, chunk);
+                        chunkStatus[chunkIndex] = true;
+                        uploadedBytes += chunkBytes;
+
+                        // Report progress
+                        const now = Date.now();
+                        const timeDiff = (now - lastTime) / 1000;
+                        if (timeDiff > 0.2) {
+                            const speed = (uploadedBytes - lastReportedBytes) / timeDiff;
+                            lastTime = now;
+                            lastReportedBytes = uploadedBytes;
+                            if (onProgress) {
+                                onProgress(uploadedBytes, file.size, speed);
+                            }
+                        }
+                        return;
                     } catch (e) {
-                        lastError = e;
+                        if (retry === maxRetries) {
+                            throw new Error(`分片 ${chunkIndex + 1} 上传失败: ${e.message}`);
+                        }
                     }
                 }
+            };
 
-                if (!success) {
-                    await this.request('POST', '/api/upload/abort', { uploadId });
-                    throw new Error(`分片 ${i + 1} 上传失败: ${lastError?.message || '未知错误'}`);
+            // Step 2: Upload chunks in parallel batches
+            try {
+                for (let i = 0; i < totalChunks; i += parallelCount) {
+                    if (this.chunkedUploadAborted) {
+                        await this.request('POST', '/api/upload/abort', { uploadId });
+                        throw new Error('上传已取消');
+                    }
+
+                    // Create batch of parallel uploads
+                    const batch = [];
+                    for (let j = 0; j < parallelCount && (i + j) < totalChunks; j++) {
+                        batch.push(uploadSingleChunk(i + j));
+                    }
+
+                    // Wait for all in batch to complete
+                    await Promise.all(batch);
                 }
+            } catch (e) {
+                await this.request('POST', '/api/upload/abort', { uploadId }).catch(() => {});
+                throw e;
+            }
 
-                uploadedBytes += (end - start);
-
-                // Calculate speed and report progress
-                const now = Date.now();
-                const timeDiff = (now - lastTime) / 1000;
-                const loadedDiff = uploadedBytes - lastLoaded;
-                const speed = timeDiff > 0.1 ? loadedDiff / timeDiff : 0;
-
-                if (timeDiff > 0.5) {
-                    lastTime = now;
-                    lastLoaded = uploadedBytes;
-                }
-
-                if (onProgress) {
-                    onProgress(uploadedBytes, file.size, speed);
-                }
-                // Don't call onStatusChange here to avoid overwriting progress info
+            // Final progress update
+            if (onProgress) {
+                onProgress(file.size, file.size, 0);
             }
 
             // Step 3: Complete upload - show merge status
@@ -693,6 +714,15 @@
             this.isConnected = false;
             this.searchTimeout = null;
             this.selectedTargetPath = '/'; // For move/copy dialogs
+
+            // Sorting state
+            this.sortColumn = 'name'; // 'name', 'modified', 'type', 'size'
+            this.sortOrder = 'asc'; // 'asc' or 'desc'
+
+            // Virtual scrolling / pagination state
+            this.pageSize = 100; // Items per page
+            this.currentPage = 0;
+            this.totalPages = 1;
 
             this.init();
         }
@@ -909,6 +939,9 @@
                 this.files = result.files;
                 this.clearSelection();
 
+                // Reset pagination when navigating to new directory
+                this.currentPage = 0;
+
                 // Update history
                 if (this.history[this.historyIndex] !== path) {
                     this.history = this.history.slice(0, this.historyIndex + 1);
@@ -945,12 +978,14 @@
         async refresh() {
             // Save current path and refresh only current directory
             const pathToRefresh = this.currentPath;
+            const savedPage = this.currentPage; // Preserve current page on refresh
             this.showLoading();
             try {
                 const result = await this.api.getFiles(pathToRefresh);
                 this.currentPath = result.path;
                 this.files = result.files;
                 this.clearSelection();
+                this.currentPage = savedPage; // Restore page after refresh
                 this.renderBreadcrumb();
                 this.renderFiles();
                 this.updateNavButtons();
@@ -1015,33 +1050,39 @@
                 items = items.filter(item => item.name.toLowerCase().includes(this.searchQuery));
             }
 
-            // Sort: folders first, then files
-            items.sort((a, b) => {
-                if (a.type === b.type) return a.name.localeCompare(b.name);
-                return a.type === 'folder' ? -1 : 1;
-            });
+            // Sort items
+            items = this.sortItems(items);
+
+            // Calculate pagination
+            const totalItems = items.length;
+            this.totalPages = Math.ceil(totalItems / this.pageSize);
+            if (this.currentPage >= this.totalPages) {
+                this.currentPage = Math.max(0, this.totalPages - 1);
+            }
+
+            // Get current page items
+            const startIdx = this.currentPage * this.pageSize;
+            const pageItems = items.slice(startIdx, startIdx + this.pageSize);
+
             const list = document.getElementById('fileList');
 
             if (items.length === 0) {
                 list.innerHTML = '';
                 document.getElementById('emptyIndicator').classList.remove('hidden');
+                this.renderPagination(0, 0);
             } else {
                 document.getElementById('emptyIndicator').classList.add('hidden');
 
                 if (this.viewMode === 'grid') {
                     list.className = 'grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2';
-                    list.innerHTML = items.map(item => this.renderGridItem(item)).join('');
+                    list.innerHTML = pageItems.map(item => this.renderGridItem(item)).join('');
                 } else {
                     list.className = 'flex flex-col';
                     list.innerHTML = `
-                            <div class="grid grid-cols-12 gap-2 px-2 py-1 text-xs text-gray-500 border-b border-gray-200">
-                                <div class="col-span-6">名称</div>
-                                <div class="col-span-2">修改日期</div>
-                                <div class="col-span-2">类型</div>
-                                <div class="col-span-2 text-right">大小</div>
-                            </div>
-                            ${items.map(item => this.renderListItem(item)).join('')}
+                            ${this.renderListHeader()}
+                            ${pageItems.map(item => this.renderListItem(item)).join('')}
                         `;
+                    this.bindSortEvents();
                 }
                 // Bind file item events
                 list.querySelectorAll('.file-item').forEach(el => {
@@ -1056,9 +1097,158 @@
                         this.showContextMenu(e.clientX, e.clientY);
                     };
                 });
+
+                this.renderPagination(totalItems, pageItems.length);
             }
             // Update status bar
-            document.getElementById('itemCount').textContent = `${items.length} 个项目`;
+            const pageInfo = this.totalPages > 1 ? ` (第 ${this.currentPage + 1}/${this.totalPages} 页)` : '';
+            document.getElementById('itemCount').textContent = `${totalItems} 个项目${pageInfo}`;
+        }
+
+        // Sort items based on current sort column and order
+        sortItems(items) {
+            const col = this.sortColumn;
+            const asc = this.sortOrder === 'asc';
+
+            return items.sort((a, b) => {
+                // Folders always first
+                if (a.type !== b.type) {
+                    return a.type === 'folder' ? -1 : 1;
+                }
+
+                let cmp = 0;
+                switch (col) {
+                    case 'name':
+                        cmp = a.name.localeCompare(b.name);
+                        break;
+                    case 'modified':
+                        cmp = (a.modified || '').localeCompare(b.modified || '');
+                        break;
+                    case 'type':
+                        const typeA = a.type === 'folder' ? '文件夹' : this.getFileType(a.name);
+                        const typeB = b.type === 'folder' ? '文件夹' : this.getFileType(b.name);
+                        cmp = typeA.localeCompare(typeB);
+                        break;
+                    case 'size':
+                        cmp = (a.size || 0) - (b.size || 0);
+                        break;
+                }
+                return asc ? cmp : -cmp;
+            });
+        }
+
+        // Render sortable list header
+        renderListHeader() {
+            const sortIcon = (col) => {
+                if (this.sortColumn !== col) return '<i class="ri-arrow-up-down-line text-gray-300"></i>';
+                return this.sortOrder === 'asc'
+                    ? '<i class="ri-arrow-up-s-line text-blue-500"></i>'
+                    : '<i class="ri-arrow-down-s-line text-blue-500"></i>';
+            };
+
+            return `
+                <div class="grid grid-cols-12 gap-2 px-2 py-1 text-xs text-gray-500 border-b border-gray-200 bg-gray-50 sticky top-0">
+                    <div class="col-span-6 cursor-pointer hover:text-blue-500 flex items-center gap-1 select-none" data-sort="name">
+                        名称 ${sortIcon('name')}
+                    </div>
+                    <div class="col-span-2 cursor-pointer hover:text-blue-500 flex items-center gap-1 select-none" data-sort="modified">
+                        修改日期 ${sortIcon('modified')}
+                    </div>
+                    <div class="col-span-2 cursor-pointer hover:text-blue-500 flex items-center gap-1 select-none" data-sort="type">
+                        类型 ${sortIcon('type')}
+                    </div>
+                    <div class="col-span-2 cursor-pointer hover:text-blue-500 flex items-center gap-1 justify-end select-none" data-sort="size">
+                        大小 ${sortIcon('size')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Bind sort click events to header columns
+        bindSortEvents() {
+            document.querySelectorAll('[data-sort]').forEach(el => {
+                el.onclick = (e) => {
+                    e.stopPropagation();
+                    const col = el.dataset.sort;
+                    if (this.sortColumn === col) {
+                        this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        this.sortColumn = col;
+                        this.sortOrder = 'asc';
+                    }
+                    this.currentPage = 0; // Reset to first page on sort
+                    this.renderFiles();
+                };
+            });
+        }
+
+        // Render pagination controls
+        renderPagination(totalItems, currentCount) {
+            let paginationEl = document.getElementById('pagination');
+            if (!paginationEl) {
+                // Create pagination element if not exists
+                const container = document.getElementById('fileContainer');
+                paginationEl = document.createElement('div');
+                paginationEl.id = 'pagination';
+                paginationEl.className = 'flex items-center justify-center gap-2 py-3 border-t border-gray-200 bg-white sticky bottom-0';
+                container.appendChild(paginationEl);
+            }
+
+            if (this.totalPages <= 1) {
+                paginationEl.innerHTML = '';
+                paginationEl.classList.add('hidden');
+                return;
+            }
+
+            paginationEl.classList.remove('hidden');
+
+            // Generate page buttons
+            let pages = [];
+            const maxVisible = 5;
+            let start = Math.max(0, this.currentPage - Math.floor(maxVisible / 2));
+            let end = Math.min(this.totalPages, start + maxVisible);
+            if (end - start < maxVisible) {
+                start = Math.max(0, end - maxVisible);
+            }
+
+            for (let i = start; i < end; i++) {
+                pages.push(i);
+            }
+
+            paginationEl.innerHTML = `
+                <button class="px-2 py-1 text-sm rounded hover:bg-gray-100 ${this.currentPage === 0 ? 'text-gray-300 cursor-not-allowed' : ''}"
+                        ${this.currentPage === 0 ? 'disabled' : ''} data-page="prev">
+                    <i class="ri-arrow-left-s-line"></i>
+                </button>
+                ${start > 0 ? '<span class="text-gray-400">...</span>' : ''}
+                ${pages.map(p => `
+                    <button class="px-3 py-1 text-sm rounded ${p === this.currentPage ? 'bg-blue-500 text-white' : 'hover:bg-gray-100'}" data-page="${p}">
+                        ${p + 1}
+                    </button>
+                `).join('')}
+                ${end < this.totalPages ? '<span class="text-gray-400">...</span>' : ''}
+                <button class="px-2 py-1 text-sm rounded hover:bg-gray-100 ${this.currentPage >= this.totalPages - 1 ? 'text-gray-300 cursor-not-allowed' : ''}"
+                        ${this.currentPage >= this.totalPages - 1 ? 'disabled' : ''} data-page="next">
+                    <i class="ri-arrow-right-s-line"></i>
+                </button>
+            `;
+
+            // Bind page click events
+            paginationEl.querySelectorAll('[data-page]').forEach(btn => {
+                btn.onclick = () => {
+                    const page = btn.dataset.page;
+                    if (page === 'prev' && this.currentPage > 0) {
+                        this.currentPage--;
+                    } else if (page === 'next' && this.currentPage < this.totalPages - 1) {
+                        this.currentPage++;
+                    } else if (!isNaN(page)) {
+                        this.currentPage = parseInt(page);
+                    }
+                    this.renderFiles();
+                    // Scroll to top of file list
+                    document.getElementById('fileContainer').scrollTop = 0;
+                };
+            });
         }
         renderGridItem(item) {
             const icon = this.getFileIcon(item);
