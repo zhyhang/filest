@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>认证有效期测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .test-section {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        button {
+            padding: 8px 16px;
+            margin: 5px;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            background: #f0f0f0;
+            border-radius: 3px;
+        }
+        .result {
+            background: #f9f9f9;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 3px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>Filest 认证有效期测试</h1>
+
+    <div class="test-section">
+        <h3>1. 存储测试凭据</h3>
+        <button onclick="storeTestCredentials()">存储测试凭据（2分钟有效期）</button>
+        <button onclick="storeExpiredCredentials()">存储已过期凭据</button>
+        <div id="store-result" class="result"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>2. 验证凭据有效性</h3>
+        <button onclick="validateCredentials()">验证当前凭据</button>
+        <div id="validate-result" class="result"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>3. 查看localStorage内容</h3>
+        <button onclick="showLocalStorage()">显示filest_auth内容</button>
+        <button onclick="clearStorage()">清除所有凭据</button>
+        <div id="storage-result" class="result"></div>
+    </div>
+
+    <script>
+        function storeTestCredentials() {
+            const authData = {
+                username: 'test_user',
+                password: 'test_password',
+                timestamp: Date.now() - (24 * 60 * 60 * 1000) + (2 * 60 * 1000) // 2分钟前存储的，还有2分钟过期
+            };
+
+            localStorage.setItem('filest_auth', JSON.stringify(authData));
+            updateResult('store-result', `已存储测试凭据，将在2分钟后过期\n存储时间: ${new Date(authData.timestamp).toLocaleString()}\n过期时间: ${new Date(authData.timestamp + 24 * 60 * 60 * 1000).toLocaleString()}`);
+        }
+
+        function storeExpiredCredentials() {
+            const authData = {
+                username: 'expired_user',
+                password: 'expired_password',
+                timestamp: Date.now() - (25 * 60 * 60 * 1000) // 25小时前存储，已过期
+            };
+
+            localStorage.setItem('filest_auth', JSON.stringify(authData));
+            updateResult('store-result', `已存储过期凭据\n存储时间: ${new Date(authData.timestamp).toLocaleString()}\n过期时间: ${new Date(authData.timestamp + 24 * 60 * 60 * 1000).toLocaleString()}`);
+        }
+
+        function validateCredentials() {
+            const stored = localStorage.getItem('filest_auth');
+            if (!stored) {
+                updateResult('validate-result', '没有找到存储的凭据');
+                return;
+            }
+
+            try {
+                const authData = JSON.parse(stored);
+                const { username, password, timestamp } = authData;
+
+                const now = Date.now();
+                const timeDiff = now - timestamp;
+                const isExpired = timeDiff > 24 * 60 * 60 * 1000;
+
+                let result = `用户名: ${username}\n`;
+                result += `密码: ${password}\n`;
+                result += `存储时间: ${new Date(timestamp).toLocaleString()}\n`;
+                result += `当前时间: ${new Date(now).toLocaleString()}\n`;
+                result += `时间差: ${Math.floor(timeDiff / (60 * 60 * 1000))}小时${Math.floor((timeDiff % (60 * 60 * 1000)) / (60 * 1000))}分钟\n`;
+                result += `状态: ${isExpired ? '已过期' : '有效'}\n`;
+
+                if (isExpired) {
+                    localStorage.removeItem('filest_auth');
+                    result += '操作: 已清除过期凭据';
+                }
+
+                updateResult('validate-result', result);
+            } catch (e) {
+                updateResult('validate-result', `解析错误: ${e.message}\n已清除无效凭据`);
+                localStorage.removeItem('filest_auth');
+            }
+        }
+
+        function showLocalStorage() {
+            const stored = localStorage.getItem('filest_auth');
+            if (!stored) {
+                updateResult('storage-result', 'localStorage中没有filest_auth');
+                return;
+            }
+
+            try {
+                const authData = JSON.parse(stored);
+                updateResult('storage-result', JSON.stringify(authData, null, 2));
+            } catch (e) {
+                updateResult('storage-result', `存储的数据格式错误: ${stored}`);
+            }
+        }
+
+        function clearStorage() {
+            localStorage.removeItem('filest_auth');
+            updateResult('storage-result', '已清除filest_auth');
+        }
+
+        function updateResult(elementId, content) {
+            document.getElementById(elementId).textContent = content;
+        }
+
+        // 页面加载时显示当前状态
+        window.onload = function() {
+            validateCredentials();
+        };
+    </script>
+</body>
+</html>
