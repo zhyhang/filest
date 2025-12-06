@@ -7,7 +7,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
     <style>
-        * { user-select: none; }
+        * { user-select: none; -webkit-tap-highlight-color: transparent; }
         .file-item:hover { background: #e5f3ff; }
         .file-item.selected { background: #cce8ff; border: 1px solid #99d1ff; }
         .sidebar-item:hover { background: #e5e5e5; }
@@ -25,6 +25,35 @@
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
         .spinner { animation: spin 1s linear infinite; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+        /* Mobile-first responsive styles */
+        @media (max-width: 767px) {
+            .mobile-hidden { display: none !important; }
+            .mobile-full { width: 100% !important; }
+            .mobile-text-xs { font-size: 0.75rem !important; }
+            .mobile-p-1 { padding: 0.25rem !important; }
+            .mobile-gap-1 { gap: 0.25rem !important; }
+
+            /* Ensure sidebar is hidden by default on mobile */
+            .sidebar-mobile { transform: translateX(-100%) !important; }
+            .sidebar-mobile.active { transform: translateX(0) !important; }
+
+            /* Touch feedback only for mobile devices (touch screens) */
+            @media (pointer: coarse) {
+                .file-item {
+                    transition: transform 0.1s ease;
+                }
+                .file-item:active {
+                    transform: scale(0.98);
+                }
+            }
+        }
+
+        /* Desktop-specific styles */
+        @media (min-width: 768px) {
+            .desktop-hidden { display: none !important; }
+            .desktop-absolute { position: absolute; }
+        }
         /* Folder tree styles */
         .tree-item { padding-left: 0.5rem; }
         .tree-item:hover { background: #e5e5e5; }
@@ -54,6 +83,7 @@
 </div>
 <!-- Toolbar -->
 <div class="bg-white border-b border-gray-200 px-2 py-1 flex items-center gap-1">
+    <!-- Navigation (always visible) -->
     <button id="btnBack" class="toolbar-btn p-2 rounded" title="后退" disabled>
         <i class="ri-arrow-left-line text-lg"></i>
     </button>
@@ -63,48 +93,122 @@
     <button id="btnUp" class="toolbar-btn p-2 rounded" title="上级目录" disabled>
         <i class="ri-arrow-up-line text-lg"></i>
     </button>
+
+    <!-- Mobile menu button -->
+    <button id="btnMobileMenu" class="toolbar-btn p-2 rounded desktop-hidden" title="菜单">
+        <i class="ri-menu-line text-lg"></i>
+    </button>
+
     <div class="w-px h-6 bg-gray-300 mx-1"></div>
-    <button id="btnRefresh" class="toolbar-btn p-2 rounded" title="刷新">
-        <i class="ri-refresh-line text-lg"></i>
-    </button>
-    <div class="w-px h-6 bg-gray-300 mx-1"></div>
-    <button id="btnNewFolder" class="toolbar-btn p-2 rounded" title="新建文件夹">
-        <i class="ri-folder-add-line text-lg"></i>
-    </button>
-    <button id="btnUpload" class="toolbar-btn p-2 rounded" title="上传文件">
-        <i class="ri-upload-2-line text-lg"></i>
-    </button>
-    <button id="btnDownload" class="toolbar-btn p-2 rounded" title="下载" disabled>
-        <i class="ri-download-2-line text-lg"></i>
-    </button>
-    <div class="w-px h-6 bg-gray-300 mx-1"></div>
-    <button id="btnCut" class="toolbar-btn p-2 rounded" title="剪切" disabled>
-        <i class="ri-scissors-cut-line text-lg"></i>
-    </button>
-    <button id="btnCopy" class="toolbar-btn p-2 rounded" title="复制" disabled>
-        <i class="ri-file-copy-line text-lg"></i>
-    </button>
-    <button id="btnPaste" class="toolbar-btn p-2 rounded" title="粘贴" disabled>
-        <i class="ri-clipboard-line text-lg"></i>
-    </button>
-    <button id="btnRename" class="toolbar-btn p-2 rounded" title="重命名" disabled>
-        <i class="ri-edit-line text-lg"></i>
-    </button>
-    <button id="btnDelete" class="toolbar-btn p-2 rounded" title="删除" disabled>
-        <i class="ri-delete-bin-line text-lg"></i>
-    </button>
-    <div class="w-px h-6 bg-gray-300 mx-1"></div>
-    <button id="btnViewGrid" class="toolbar-btn p-2 rounded bg-gray-100" title="网格视图">
-        <i class="ri-grid-fill text-lg"></i>
-    </button>
-    <button id="btnViewList" class="toolbar-btn p-2 rounded" title="列表视图">
-        <i class="ri-list-check text-lg"></i>
-    </button>
+
+    <!-- Desktop toolbar (visible on desktop) -->
+    <div id="desktopToolbar" class="flex items-center gap-1 mobile-hidden">
+        <button id="btnRefresh" class="toolbar-btn p-2 rounded" title="刷新">
+            <i class="ri-refresh-line text-lg"></i>
+        </button>
+        <div class="w-px h-6 bg-gray-300 mx-1"></div>
+        <button id="btnNewFolder" class="toolbar-btn p-2 rounded" title="新建文件夹">
+            <i class="ri-folder-add-line text-lg"></i>
+        </button>
+        <button id="btnUpload" class="toolbar-btn p-2 rounded" title="上传文件">
+            <i class="ri-upload-2-line text-lg"></i>
+        </button>
+        <button id="btnDownload" class="toolbar-btn p-2 rounded" title="下载" disabled>
+            <i class="ri-download-2-line text-lg"></i>
+        </button>
+        <div class="w-px h-6 bg-gray-300 mx-1"></div>
+        <button id="btnCut" class="toolbar-btn p-2 rounded" title="剪切" disabled>
+            <i class="ri-scissors-cut-line text-lg"></i>
+        </button>
+        <button id="btnCopy" class="toolbar-btn p-2 rounded" title="复制" disabled>
+            <i class="ri-file-copy-line text-lg"></i>
+        </button>
+        <button id="btnPaste" class="toolbar-btn p-2 rounded" title="粘贴" disabled>
+            <i class="ri-clipboard-line text-lg"></i>
+        </button>
+        <button id="btnRename" class="toolbar-btn p-2 rounded" title="重命名" disabled>
+            <i class="ri-edit-line text-lg"></i>
+        </button>
+        <button id="btnDelete" class="toolbar-btn p-2 rounded" title="删除" disabled>
+            <i class="ri-delete-bin-line text-lg"></i>
+        </button>
+        <div class="w-px h-6 bg-gray-300 mx-1"></div>
+        <button id="btnViewGrid" class="toolbar-btn p-2 rounded bg-gray-100" title="网格视图">
+            <i class="ri-grid-fill text-lg"></i>
+        </button>
+        <button id="btnViewList" class="toolbar-btn p-2 rounded" title="列表视图">
+            <i class="ri-list-check text-lg"></i>
+        </button>
+    </div>
+
+    <!-- Mobile quick actions (visible on mobile) -->
+    <div id="mobileQuickActions" class="flex items-center gap-1 desktop-hidden">
+        <button id="btnRefreshMobile" class="toolbar-btn p-2 rounded" title="刷新">
+            <i class="ri-refresh-line text-lg"></i>
+        </button>
+        <button id="btnUploadMobile" class="toolbar-btn p-2 rounded" title="上传">
+            <i class="ri-upload-2-line text-lg"></i>
+        </button>
+        <button id="btnMoreMobile" class="toolbar-btn p-2 rounded" title="更多">
+            <i class="ri-more-2-fill text-lg"></i>
+        </button>
+    </div>
+
     <div class="flex-1"></div>
+
+    <!-- Search (responsive) -->
     <div class="relative">
-        <input type="text" id="searchInput" placeholder="搜索文件..."
-               class="pl-8 pr-3 py-1.5 border border-gray-300 rounded text-sm w-48 focus:outline-none focus:border-blue-500">
+        <input type="text" id="searchInput" placeholder="搜索..."
+               class="pl-8 pr-3 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:border-blue-500 w-20 md:w-32 lg:w-48">
         <i class="ri-search-line absolute left-2 top-1/2 -translate-y-1/2 text-gray-400"></i>
+    </div>
+</div>
+
+<!-- Mobile Action Panel (hidden by default) -->
+<div id="mobileActionPanel" class="fixed inset-0 bg-black/50 z-40 hidden desktop-hidden">
+    <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-xl shadow-2xl">
+        <div class="p-4">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-medium text-lg">操作</h3>
+                <button id="closeMobilePanel" class="p-2 rounded hover:bg-gray-100">
+                    <i class="ri-close-line text-xl"></i>
+                </button>
+            </div>
+            <div class="grid grid-cols-4 gap-4">
+                <button class="mobile-action-btn flex flex-col items-center gap-2 p-3 rounded hover:bg-gray-50" data-action="newFolder">
+                    <i class="ri-folder-add-line text-2xl text-blue-500"></i>
+                    <span class="text-xs">新建文件夹</span>
+                </button>
+                <button class="mobile-action-btn flex flex-col items-center gap-2 p-3 rounded hover:bg-gray-50" data-action="upload">
+                    <i class="ri-upload-2-line text-2xl text-green-500"></i>
+                    <span class="text-xs">上传</span>
+                </button>
+                <button class="mobile-action-btn flex flex-col items-center gap-2 p-3 rounded hover:bg-gray-50" data-action="cut">
+                    <i class="ri-scissors-cut-line text-2xl text-orange-500"></i>
+                    <span class="text-xs">剪切</span>
+                </button>
+                <button class="mobile-action-btn flex flex-col items-center gap-2 p-3 rounded hover:bg-gray-50" data-action="copy">
+                    <i class="ri-file-copy-line text-2xl text-purple-500"></i>
+                    <span class="text-xs">复制</span>
+                </button>
+                <button class="mobile-action-btn flex flex-col items-center gap-2 p-3 rounded hover:bg-gray-50" data-action="paste">
+                    <i class="ri-clipboard-line text-2xl text-indigo-500"></i>
+                    <span class="text-xs">粘贴</span>
+                </button>
+                <button class="mobile-action-btn flex flex-col items-center gap-2 p-3 rounded hover:bg-gray-50" data-action="rename">
+                    <i class="ri-edit-line text-2xl text-yellow-500"></i>
+                    <span class="text-xs">重命名</span>
+                </button>
+                <button class="mobile-action-btn flex flex-col items-center gap-2 p-3 rounded hover:bg-gray-50" data-action="delete">
+                    <i class="ri-delete-bin-line text-2xl text-red-500"></i>
+                    <span class="text-xs">删除</span>
+                </button>
+                <button class="mobile-action-btn flex flex-col items-center gap-2 p-3 rounded hover:bg-gray-50" data-action="download">
+                    <i class="ri-download-2-line text-2xl text-cyan-500"></i>
+                    <span class="text-xs">下载</span>
+                </button>
+            </div>
+        </div>
     </div>
 </div>
 <!-- Address Bar -->
@@ -116,9 +220,20 @@
 </div>
 <!-- Main Content -->
 <div class="flex flex-1 overflow-hidden">
+    <!-- Mobile Sidebar Overlay -->
+    <div id="mobileSidebarOverlay" class="fixed inset-0 bg-black/50 z-30 hidden desktop-hidden"></div>
+
     <!-- Sidebar -->
-    <div id="sidebar" class="bg-gray-50 border-r border-gray-200 overflow-y-auto flex-shrink-0" style="width: 224px;">
+    <div id="sidebar" class="bg-gray-50 border-r border-gray-200 overflow-y-auto flex-shrink-0 fixed -translate-x-full md:relative md:translate-x-0 z-40 transition-transform duration-300" style="width: 224px;">
         <div class="p-2">
+            <!-- Mobile sidebar header -->
+            <div class="flex items-center justify-between mb-4 md:hidden">
+                <h2 class="font-medium text-gray-700">菜单</h2>
+                <button id="closeMobileSidebar" class="p-1.5 rounded hover:bg-gray-100">
+                    <i class="ri-close-line text-lg"></i>
+                </button>
+            </div>
+
             <div class="text-xs text-gray-500 font-medium px-2 py-1">快速访问</div>
             <div id="quickAccess" class="space-y-0.5">
                 <div class="sidebar-item flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer" data-path="/">
@@ -151,11 +266,13 @@
             </div>
         </div>
     </div>
-    <!-- Resizer -->
-    <div id="resizer" class="w-1 bg-gray-200 hover:bg-blue-400 cursor-col-resize flex-shrink-0 transition-colors"></div>
+
+    <!-- Resizer (desktop only) -->
+    <div id="resizer" class="w-1 bg-gray-200 hover:bg-blue-400 cursor-col-resize flex-shrink-0 transition-colors mobile-hidden"></div>
+
     <!-- File List -->
-    <div id="fileContainer" class="flex-1 overflow-auto p-4 bg-white">
-        <div id="fileList" class="grid grid-cols-6 gap-2">
+    <div id="fileContainer" class="flex-1 overflow-auto p-2 md:p-4 bg-white">
+        <div id="fileList" class="grid grid-cols-2 gap-2 md:grid-cols-3 md:gap-2 lg:grid-cols-4 lg:gap-2 xl:grid-cols-6 xl:gap-2">
             <!-- Files will be rendered here -->
         </div>
         <div id="loadingIndicator" class="hidden flex items-center justify-center h-full">
@@ -180,12 +297,13 @@
     </div>
 </div>
 <!-- Status Bar -->
-<div class="bg-gray-100 border-t border-gray-200 px-4 py-1 flex items-center text-xs text-gray-600">
-    <span id="itemCount">0 个项目</span>
-    <span class="mx-2">|</span>
-    <span id="selectedCount">未选择</span>
+<div class="bg-gray-100 border-t border-gray-200 px-2 md:px-4 py-1 flex items-center text-xs text-gray-600">
+    <span id="itemCount" class="mobile-text-xs">0 个项目</span>
+    <span class="mx-1 md:mx-2">|</span>
+    <span id="selectedCount" class="mobile-text-xs">未选择</span>
     <span class="flex-1"></span>
-    <span id="currentPath">/</span>
+    <span id="currentPath" class="hidden md:inline mobile-text-xs">/</span>
+    <span id="currentPathMobile" class="md:hidden mobile-text-xs truncate max-w-24">/</span>
 </div>
 <!-- Context Menu -->
 <div id="contextMenu" class="context-menu fixed bg-white border border-gray-200 rounded-lg py-1 hidden z-50 min-w-48">
@@ -266,46 +384,46 @@
     </div>
 </div>
 <!-- Modal Template -->
-<div id="modal" class="modal-overlay fixed inset-0 hidden z-50 flex items-center justify-center">
-    <div class="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4">
+<div id="modal" class="modal-overlay fixed inset-0 hidden z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-hidden flex flex-col">
         <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-            <h3 id="modalTitle" class="font-medium">标题</h3>
-            <button id="modalClose" class="text-gray-400 hover:text-gray-600">
+            <h3 id="modalTitle" class="font-medium text-lg">标题</h3>
+            <button id="modalClose" class="text-gray-400 hover:text-gray-600 p-1">
                 <i class="ri-close-line text-xl"></i>
             </button>
         </div>
-        <div id="modalBody" class="p-4">
+        <div id="modalBody" class="p-4 overflow-y-auto flex-1">
             <!-- Modal content -->
         </div>
         <div id="modalFooter" class="px-4 py-3 border-t border-gray-100 flex justify-end gap-2">
-            <button id="modalCancel" class="px-4 py-1.5 border border-gray-300 rounded hover:bg-gray-50">取消</button>
-            <button id="modalConfirm" class="px-4 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600">确定</button>
+            <button id="modalCancel" class="px-4 py-2 border border-gray-300 rounded hover:bg-gray-50 min-w-[80px]">取消</button>
+            <button id="modalConfirm" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 min-w-[80px]">确定</button>
         </div>
     </div>
 </div>
 <!-- Upload Progress -->
-<div id="uploadProgress" class="fixed bottom-4 right-4 bg-white rounded-lg shadow-xl border border-gray-200 w-96 hidden z-40">
-    <div class="px-4 py-2 border-b border-gray-100 flex items-center justify-between">
+<div id="uploadProgress" class="fixed inset-x-4 bottom-4 md:inset-x-auto md:left-auto md:right-4 md:bottom-4 bg-white rounded-lg shadow-xl border border-gray-200 w-full md:w-96 hidden z-40">
+    <div class="px-3 py-2 border-b border-gray-100 flex items-center justify-between">
         <span class="font-medium text-sm">上传进度</span>
         <div class="flex items-center gap-2">
             <button id="cancelUpload" class="text-xs text-red-500 hover:text-red-600 px-2 py-0.5 border border-red-300 rounded hover:bg-red-50">
                 取消
             </button>
-            <button id="closeProgress" class="text-gray-400 hover:text-gray-600">
-                <i class="ri-close-line"></i>
+            <button id="closeProgress" class="text-gray-400 hover:text-gray-600 p-1">
+                <i class="ri-close-line text-lg"></i>
             </button>
         </div>
     </div>
-    <div class="p-4">
+    <div class="p-3 md:p-4">
         <div class="flex items-center gap-2 mb-2">
-            <i class="ri-file-line text-gray-500"></i>
+            <i class="ri-file-line text-gray-500 text-lg"></i>
             <span id="uploadFileName" class="text-sm truncate flex-1">filename.txt</span>
-            <span id="uploadPercent" class="text-sm text-gray-500">0%</span>
+            <span id="uploadPercent" class="text-sm text-gray-500 whitespace-nowrap ml-2">0%</span>
         </div>
         <div class="w-full bg-gray-200 rounded-full h-2">
             <div id="uploadBar" class="bg-blue-500 h-2 rounded-full transition-all" style="width: 0%"></div>
         </div>
-        <div id="uploadStatus" class="text-xs text-gray-500 mt-2"></div>
+        <div id="uploadStatus" class="text-xs text-gray-500 mt-2 truncate"></div>
     </div>
 </div>
 <!-- Hidden file input -->
@@ -709,7 +827,7 @@
             this.clipboard = { items: [], mode: null };
             this.history = ['/'];
             this.historyIndex = 0;
-            this.viewMode = 'grid';
+            this.viewMode = localStorage.getItem('filest_view_mode') || 'list';
             this.searchQuery = '';
             this.isConnected = false;
             this.searchTimeout = null;
@@ -730,6 +848,12 @@
             // Check for stored credentials or prompt for login
             await this.authenticate();
             this.bindEvents();
+
+            // Ensure mobile sidebar is hidden on load
+            if (window.innerWidth < 768) {
+                this.closeMobileSidebar();
+            }
+
             // Load navigation and side panel data in parallel for faster startup
             await Promise.all([
                 this.navigateTo('/'),
@@ -974,6 +1098,173 @@
             if (savedWidth) {
                 sidebar.style.width = savedWidth;
             }
+
+            // === Mobile Event Handlers ===
+
+            // Mobile menu button
+            const btnMobileMenu = document.getElementById('btnMobileMenu');
+            if (btnMobileMenu) {
+                btnMobileMenu.onclick = () => this.toggleMobileSidebar();
+            }
+
+            // Mobile sidebar overlay
+            const mobileOverlay = document.getElementById('mobileSidebarOverlay');
+            if (mobileOverlay) {
+                mobileOverlay.onclick = () => this.closeMobileSidebar();
+            }
+
+            // Close mobile sidebar button
+            const closeMobileSidebar = document.getElementById('closeMobileSidebar');
+            if (closeMobileSidebar) {
+                closeMobileSidebar.onclick = () => this.closeMobileSidebar();
+            }
+
+            // Mobile quick actions
+            const btnRefreshMobile = document.getElementById('btnRefreshMobile');
+            if (btnRefreshMobile) {
+                btnRefreshMobile.onclick = () => this.refresh();
+            }
+
+            const btnUploadMobile = document.getElementById('btnUploadMobile');
+            if (btnUploadMobile) {
+                btnUploadMobile.onclick = () => document.getElementById('fileInput').click();
+            }
+
+            const btnMoreMobile = document.getElementById('btnMoreMobile');
+            if (btnMoreMobile) {
+                btnMoreMobile.onclick = () => this.showMobileActionPanel();
+            }
+
+            // Mobile action panel
+            const closeMobilePanel = document.getElementById('closeMobilePanel');
+            if (closeMobilePanel) {
+                closeMobilePanel.onclick = () => this.hideMobileActionPanel();
+            }
+
+            // Mobile action buttons
+            document.querySelectorAll('.mobile-action-btn').forEach(btn => {
+                btn.onclick = () => {
+                    const action = btn.dataset.action;
+                    this.handleMobileAction(action);
+                    this.hideMobileActionPanel();
+                };
+            });
+
+            // Touch events for swipe gestures
+            this.setupTouchGestures();
+
+            // Handle window resize
+            window.addEventListener('resize', () => this.handleResize());
+        }
+
+        // Mobile-specific methods
+        toggleMobileSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('mobileSidebarOverlay');
+
+            if (sidebar.classList.contains('-translate-x-full')) {
+                this.openMobileSidebar();
+            } else {
+                this.closeMobileSidebar();
+            }
+        }
+
+        openMobileSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('mobileSidebarOverlay');
+
+            sidebar.classList.remove('-translate-x-full');
+            overlay.classList.remove('hidden');
+        }
+
+        closeMobileSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('mobileSidebarOverlay');
+
+            sidebar.classList.add('-translate-x-full');
+            overlay.classList.add('hidden');
+        }
+
+        showMobileActionPanel() {
+            const panel = document.getElementById('mobileActionPanel');
+            panel.classList.remove('hidden');
+        }
+
+        hideMobileActionPanel() {
+            const panel = document.getElementById('mobileActionPanel');
+            panel.classList.add('hidden');
+        }
+
+        handleMobileAction(action) {
+            switch (action) {
+                case 'newFolder': this.showNewFolderModal(); break;
+                case 'upload': document.getElementById('fileInput').click(); break;
+                case 'cut': this.cutSelected(); break;
+                case 'copy': this.copySelected(); break;
+                case 'paste': this.paste(); break;
+                case 'rename': this.showRenameModal(); break;
+                case 'delete': this.deleteSelected(); break;
+                case 'download': this.downloadSelected(); break;
+            }
+        }
+
+        setupTouchGestures() {
+            const sidebar = document.getElementById('sidebar');
+            const mainContent = document.getElementById('fileContainer');
+
+            let touchStartX = 0;
+            let touchStartY = 0;
+            let touchEndX = 0;
+            let touchEndY = 0;
+
+            const handleTouchStart = (e) => {
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+            };
+
+            const handleTouchEnd = (e) => {
+                touchEndX = e.changedTouches[0].clientX;
+                touchEndY = e.changedTouches[0].clientY;
+                this.handleSwipe();
+            };
+
+            mainContent.addEventListener('touchstart', handleTouchStart, { passive: true });
+            mainContent.addEventListener('touchend', handleTouchEnd, { passive: true });
+
+            // Store swipe coordinates
+            this.touchCoords = { touchStartX, touchStartY, touchEndX, touchEndY };
+        }
+
+        handleSwipe() {
+            const { touchStartX, touchStartY, touchEndX, touchEndY } = this.touchCoords;
+
+            const deltaX = touchEndX - touchStartX;
+            const deltaY = Math.abs(touchEndY - touchStartY);
+
+            // Check if it's a horizontal swipe
+            if (Math.abs(deltaX) > 50 && deltaY < 100) {
+                if (deltaX > 50) {
+                    // Swipe right - open sidebar
+                    this.openMobileSidebar();
+                } else if (deltaX < -50) {
+                    // Swipe left - close sidebar
+                    this.closeMobileSidebar();
+                }
+            }
+        }
+
+        handleResize() {
+            // Close mobile sidebar when switching to desktop view
+            if (window.innerWidth >= 768) {
+                this.closeMobileSidebar();
+                this.hideMobileActionPanel();
+            } else {
+                // Ensure sidebar is hidden on mobile resize
+                this.closeMobileSidebar();
+            }
+
+            // Re-render files to adjust grid columns
+            this.renderFiles();
         }
         async navigateTo(path) {
             this.showLoading();
@@ -1084,7 +1375,27 @@
             breadcrumb.querySelectorAll('.breadcrumb-item').forEach(item => {
                 item.onclick = () => this.navigateTo(item.dataset.path);
             });
-            document.getElementById('currentPath').textContent = this.currentPath;
+
+            // Update both desktop and mobile path displays
+            const currentPathEl = document.getElementById('currentPath');
+            const currentPathMobileEl = document.getElementById('currentPathMobile');
+
+            if (currentPathEl) {
+                currentPathEl.textContent = this.currentPath;
+            }
+            if (currentPathMobileEl) {
+                // For mobile, show just the folder name or truncate long paths
+                const pathParts = this.currentPath.split('/');
+                if (this.currentPath === '/') {
+                    currentPathMobileEl.textContent = '/';
+                } else if (pathParts.length > 3) {
+                    // Show last 2 parts for very long paths
+                    const lastParts = pathParts.slice(-2);
+                    currentPathMobileEl.textContent = '.../' + lastParts.join('/');
+                } else {
+                    currentPathMobileEl.textContent = this.currentPath;
+                }
+            }
         }
         renderFiles() {
             let items = [...this.files];
@@ -1117,8 +1428,9 @@
             } else {
                 document.getElementById('emptyIndicator').classList.add('hidden');
 
+                // Use user's preferred view mode
                 if (this.viewMode === 'grid') {
-                    list.className = 'grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2';
+                    list.className = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2';
                     list.innerHTML = pageItems.map(item => this.renderGridItem(item)).join('');
                 } else {
                     list.className = 'flex flex-col';
@@ -1132,6 +1444,53 @@
                 list.querySelectorAll('.file-item').forEach(el => {
                     el.onclick = (e) => this.handleItemClick(e, el.dataset.path);
                     el.ondblclick = () => this.openItem(el.dataset.path);
+
+                    // Mobile double-tap detection for folders only
+                    let lastTapTime = 0;
+                    let lastTapPath = null;
+                    let tapCount = 0;
+                    let tapTimeout = null;
+
+                    el.addEventListener('touchend', (e) => {
+                        const currentTime = new Date().getTime();
+                        const currentPath = el.dataset.path;
+
+                        // Clear existing timeout
+                        if (tapTimeout) {
+                            clearTimeout(tapTimeout);
+                        }
+
+                        // Check for double-tap on same item within 300ms
+                        if (currentPath === lastTapPath && (currentTime - lastTapTime) < 300 && (currentTime - lastTapTime) > 0) {
+                            // Double-tap detected
+                            e.preventDefault();
+                            e.stopPropagation();
+
+                            // Reset tap tracking
+                            tapCount = 0;
+                            lastTapTime = 0;
+                            lastTapPath = null;
+
+                            // Get file info to check if it's a folder
+                            const item = this.files.find(f => f.path === currentPath);
+                            if (item && item.type === 'folder') {
+                                this.openItem(currentPath);
+                            }
+                        } else {
+                            // Single tap - set up timeout for next potential tap
+                            lastTapTime = currentTime;
+                            lastTapPath = currentPath;
+                            tapCount = 1;
+
+                            // Reset if no second tap within timeout
+                            tapTimeout = setTimeout(() => {
+                                tapCount = 0;
+                                lastTapTime = 0;
+                                lastTapPath = null;
+                            }, 350);
+                        }
+                    }, { passive: false });
+
                     el.oncontextmenu = (e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -1299,9 +1658,9 @@
             const selected = this.selectedItems.includes(item.path) ? 'selected' : '';
             const typeLabel = item.type === 'folder' ? '文件夹' : '文件';
             return `
-                    <div class="file-item p-2 rounded border border-transparent cursor-pointer flex flex-col items-center ${selected}" data-path="${item.path}" role="button" aria-label="${item.name} ${typeLabel}">
-                        <i class="${icon} text-4xl mb-1"></i>
-                        <span class="text-center text-xs break-all line-clamp-2">${item.name}</span>
+                    <div class="file-item p-3 rounded-lg border border-transparent cursor-pointer flex flex-col items-center justify-center min-h-[80px] active:scale-95 transition-transform ${selected}" data-path="${item.path}" role="button" aria-label="${item.name} ${typeLabel}">
+                        <i class="${icon} text-3xl mb-2"></i>
+                        <span class="text-center text-xs break-all line-clamp-2 w-full px-1">${item.name}</span>
                     </div>
                 `;
         }
@@ -1311,14 +1670,14 @@
             const type = item.type === 'folder' ? '文件夹' : this.getFileType(item.name);
             const size = item.type === 'folder' ? '' : item.sizeFormatted || this.formatSize(item.size);
             return `
-                    <div class="file-item grid grid-cols-12 gap-2 px-2 py-1.5 rounded border border-transparent cursor-pointer items-center ${selected}" data-path="${item.path}" role="button" aria-label="${item.name} ${type}">
-                        <div class="col-span-6 flex items-center gap-2 min-w-0">
+                    <div class="file-item grid grid-cols-12 gap-2 px-2 py-2 rounded border border-transparent cursor-pointer items-center min-h-[48px] active:scale-[0.98] transition-transform ${selected}" data-path="${item.path}" role="button" aria-label="${item.name} ${type}">
+                        <div class="col-span-12 sm:col-span-6 flex items-center gap-2 min-w-0">
                             <i class="${icon} text-lg flex-shrink-0"></i>
-                            <span class="truncate">${item.name}</span>
+                            <span class="truncate text-sm">${item.name}</span>
                         </div>
-                        <div class="col-span-2 text-gray-500 text-xs">${item.modified || ''}</div>
-                        <div class="col-span-2 text-gray-500 text-xs">${type}</div>
-                        <div class="col-span-2 text-gray-500 text-xs text-right">${size}</div>
+                        <div class="hidden sm:block col-span-2 text-gray-500 text-xs">${item.modified || ''}</div>
+                        <div class="hidden sm:block col-span-2 text-gray-500 text-xs">${type}</div>
+                        <div class="hidden sm:block col-span-2 text-gray-500 text-xs text-right">${size}</div>
                     </div>
                 `;
         }
@@ -1451,6 +1810,7 @@
         }
         setViewMode(mode) {
             this.viewMode = mode;
+            localStorage.setItem('filest_view_mode', mode);
             document.getElementById('btnViewGrid').classList.toggle('bg-gray-100', mode === 'grid');
             document.getElementById('btnViewList').classList.toggle('bg-gray-100', mode === 'list');
             this.renderFiles();

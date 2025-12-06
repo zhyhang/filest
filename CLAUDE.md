@@ -102,3 +102,4 @@ All API endpoints are prefixed with `/api` and require HTTP Basic authentication
 - Async error handling uses `Result<T, String>` pattern in handlers
 - Logging is configured via `tracing` with configurable verbosity
 - Chunked upload support enables handling large files with constant memory usage
+- 前端修改或完善时同时兼容pc端和移动端
